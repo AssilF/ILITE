@@ -335,14 +335,22 @@ typedef struct __attribute__((packed)) {
   bool isEmergencyStop; // true if emergency stop is pressed
 } ControlPacket;
 */
-struct emissionDataPacket  
+// Packet used to control Drongaz. Values are kept fairly small so the
+// packet remains well under the 250 byte ESP-NOW limit.
+struct emissionDataPacket
 {
-    uint16_t throttle;
-    int8_t pitchBias;
-    int8_t rollBias;
-    int8_t yawBias;
+    // Target altitude command. The value ranges from 0-2000 and is
+    // interpreted by the flight controller as the desired altitude
+    // setpoint. When the joystick is released the craft should attempt to
+    // hold this altitude using its own PID controller.
+    uint16_t altitude;
+    // Desired attitude angles in degrees.
+    int16_t pitchAngle;
+    int16_t rollAngle;
+    int16_t yawAngle;
+    // Motor arming flag.
     bool arm_motors;
-}emission; //dummy packet
+}emission; // packet to be emitted
 
 struct receptionDataPacket
 {
@@ -352,8 +360,14 @@ struct receptionDataPacket
   byte okIndex;
 }reception;
 
+// Accumulated altitude target and yaw command. Joystick deflection adjusts
+// these values incrementally so altitude and yaw are controlled by rate
+// rather than absolute joystick position.
+int16_t altitudeTarget = 0;
+int16_t yawCommand     = 0;
+
 //Coms Fcns
-void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) 
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   // Serial.print("\r\nLast Packet Send Status:\t");
   // Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
@@ -361,6 +375,36 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   memcpy(&reception, incomingData, sizeof(reception));
+}
+
+// Simple UI for displaying the current command values for Drongaz.
+// The interface shows numeric values and basic bar graphs for the
+// altitude and attitude commands on the small OLED display.
+void drawDrongazInterface(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+
+  // Altitude value and bar graph
+  oled.setCursor(0,10);
+  oled.print("Alt:");
+  oled.print(emission.altitude);
+  oled.drawFrame(0,14,screen_Width,6);
+  oled.drawBox(0,14,map(emission.altitude,0,2000,0,screen_Width),6);
+
+  // Pitch and roll values
+  oled.setCursor(0,30);
+  oled.print("P:");
+  oled.print(emission.pitchAngle);
+  oled.setCursor(64,30);
+  oled.print("R:");
+  oled.print(emission.rollAngle);
+
+  // Yaw value
+  oled.setCursor(0,45);
+  oled.print("Y:");
+  oled.print(emission.yawAngle);
+
+  oled.sendBuffer();
 }
 
 
@@ -769,14 +813,6 @@ void loop() {
   // debug("\n joystickY : ")debug(analogRead(joystickA_Y))
   // delay(500);
   // displayMenu();
-  oled.clearBuffer();
-  drawFirePosition();
-  drawLine();
-  drawMotionJoystickPose();
-  drawPeripheralJoystickPose();
-  drawProximity();
-  drawSpeed();
-  oled.sendBuffer();
   processComsData(0);
 
   if(millis()-lastBtnModeMillis >= 200)
@@ -804,15 +840,30 @@ void loop() {
     ledcWrite(0,0);
   }
 
-  // emission.MotionState = botMotionState;
-  emission.throttle= (abs(map(analogRead(joystickA_Y),0,4096,-1000,1000))*map(analogRead(potA),0,4096,0,100)*0.01)+1000;
-  emission.yawBias= map(analogRead(joystickA_X),0,4096,-100,100);
-  //emission.isEmergencyStop= !digitalRead(button1); 
-  emission.arm_motors = btnmode;
-  emission.rollBias= map(analogRead(joystickB_X),0,4096,-100,100);
-  emission.pitchBias= map(analogRead(joystickB_Y),0,4096,-100,100);
-  // emission.pitch= map(analogRead(joystickB_Y),0,4096,0,180);
+  // Populate packet with desired control values
+  // Altitude is controlled incrementally: joystick deflection adjusts the
+  // accumulated altitude target rather than sending raw throttle. Releasing
+  // the joystick commands the craft to hold the new altitude.
+  int16_t altDelta = map(analogRead(joystickA_Y),0,4096,-20,20);
+  if (abs(altDelta) < 2) altDelta = 0; // small deadband to prevent drift
+  altitudeTarget = constrain(altitudeTarget + altDelta, 0, 2000);
+  emission.altitude = altitudeTarget;
 
+  // Yaw is controlled incrementally: joystick deflection adjusts the
+  // accumulated yaw command rather than setting an absolute angle.
+  int16_t yawDelta = map(analogRead(joystickA_X),0,4096,-10,10);
+  if (abs(yawDelta) < 2) yawDelta = 0; // small deadband to prevent drift
+  yawCommand = constrain(yawCommand + yawDelta, -180, 180);
+  emission.yawAngle = yawCommand;
+
+  emission.rollAngle  = map(analogRead(joystickB_X),0,4096,-90,90);
+  emission.pitchAngle = map(analogRead(joystickB_Y),0,4096,-90,90);
+  emission.arm_motors = btnmode;
+
+  // Update OLED with current command values
+  drawDrongazInterface();
+
+  // Send packet via ESP-NOW
   if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
   {
     sent_Status=1;
