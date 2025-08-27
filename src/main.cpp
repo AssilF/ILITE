@@ -17,7 +17,7 @@
 
 //Pin Definitions:
 #define buzzer_Pin GPIO_NUM_26//Takes Tunes
-#define encoderA 32 //clock
+#define encoderA 16 //clock
 #define encoderB 17 //data
 #define encoderBtn 18 //btn ofc
 #define joystickBtnA 19
@@ -31,7 +31,7 @@
 #define button3 27
 #define potA 32 
 #define battery_pin 33 //POTB replaced with battery. . .
-#define potB 4 //this pin will compare a threshhold, 2 batteries when depleted should be around 6.9volts
+#define potB 4 //this pin will compare a threshhold, 2S batteries when depleted should be around 6.9volts
 #define LED_Pin 2     //by setting this as a reference for an internal comparator, we should get a controller low battery flag.
 
 //other definitions:
@@ -62,6 +62,8 @@ volatile unsigned long button3Millis;
 volatile unsigned long joystickBtnAMillis;
 volatile unsigned long encoderBtnMillis;
 
+bool isbeeping=1;
+
 void IRAM_ATTR button1ISR()
 {
   if(millis()-button1Millis>=deadtime){ button1State=1;  button1Millis=millis();} //falling edge for all buttons
@@ -90,17 +92,18 @@ void IRAM_ATTR encoderBtnISR()
 void IRAM_ATTR encoderClockISR() //no need to put deadtime since we have a hardware debouncer
 {
 if(digitalRead(encoderB)==1){encoderCount++;}else{encoderCount--;}
+Serial.println(encoderCount);
 }
 
 bool botmode=0;
 bool lastbtn;
 
-void check_Press()
-{ if(digitalRead(button1) == 1){button1State=0;}
-  if(digitalRead(button2) == 1){button2State=0; lastbtn=0;}
-  if(digitalRead(button3) == 1){button3State=0;}
-  if(digitalRead(encoderBtn) == 0){encoderBtnState=0;}
-  if(digitalRead(joystickBtnA) == 1){joystickBtnAState=0;}
+void check_Press(){
+//  if(digitalRead(button1) == 1){button1State=0;}
+//   if(digitalRead(button2) == 1){button2State=0; lastbtn=0;}
+//   if(digitalRead(button3) == 1){button3State=0;}
+//   if(digitalRead(encoderBtn) == 0){encoderBtnState=0;}
+//   if(digitalRead(joystickBtnA) == 1){joystickBtnAState=0;}
 }
 
 //Display business
@@ -217,11 +220,11 @@ void drawProximity()
  //Us bot
  oled.setDrawColor(1);
  oled.drawRFrame(14,36,12,28,3);
- oled.drawBox(16,57,8,map(Front_Distance,0,50,0,27));
+ oled.drawBox(16,57,8,map(Front_Distance,0,50,27,0));
  //Us Front
  oled.setDrawColor(1);
  oled.drawRFrame(1,36,12,28,3);
- oled.drawBox(3,57,8,map(Bottom_Distance,0,50,0,27));
+ oled.drawBox(3,57,8,map(Bottom_Distance,0,50,27,0));
 }
 
 
@@ -235,10 +238,10 @@ void drawSpeed() //actual speed = numbers, joystick speed = blue, accel = checke
   oled.setDrawColor(2);
   oled.setCursor(56, 58);
   oled.print(speed); 
-  oled.setDrawColor(1);
+  oled.setDrawColor(2);
   oled.drawRFrame(28,48,71,12,4);
   oled.drawBox(30,50,map(speed,0,100,0,67),8); // max = 67
-  oled.drawLine(32, 61, map(speedTarget,0,100,32,80), 61);
+  oled.drawLine(32, 61, map(analogRead(potA),0,4096,32,80), 61);
 }
 
 
@@ -263,7 +266,7 @@ void drawFirePosition(){
   oled.setDrawColor(1);
   oled.drawRFrame(28,35,71,12,4);
   oled.setFont(u8g2_font_open_iconic_all_1x_t);
-  oled.drawGlyph(map(firePose,0,180,32,80), 45, 0x00a8);
+  oled.drawGlyph(map(firePose,0,180,80,32), 45, 0x00a8);
 }
 
 
@@ -317,7 +320,7 @@ static int speedFactor;
 
 //Addresses and statics
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; //This is the MAC universal broadcast address.
-uint8_t targetAddress[] = {0x78, 0x21, 0x84, 0x9A, 0x58, 0x28};  //this MAC 78:21:84:7E:68:1C
+uint8_t targetAddress[] = {0x50, 0x78, 0x7D, 0x45, 0xD9, 0xF0};  //this MAC 78:21:84:7E:68:1C new one: 78:21:84:80:3C:40 Jerray: CC:7B:5C:26:DA:30 DRONGAZ C3 50:78:7D:45:D9:F0
 static esp_now_peer_info bot;
 
 static bool sent_Status;
@@ -325,12 +328,20 @@ static bool receive_Status;
 
 //packet structs; these packets must NOT exceed 250bytes @ all costs!
 //Sent Packets
-struct emissionDataPacket
+/*
+typedef struct __attribute__((packed)) {
+  int8_t speed;   // -100 to 100
+  int8_t turn;    // -100 to 100
+  bool isEmergencyStop; // true if emergency stop is pressed
+} ControlPacket;
+*/
+struct emissionDataPacket  
 {
-  byte replyINDEX;
-  byte Speed;
-  byte MotionState;
-  bool bool1[3]; //corresponding to  the 3 buttons.
+    uint16_t throttle;
+    int8_t pitchBias;
+    int8_t rollBias;
+    int8_t yawBias;
+    bool arm_motors;
 }emission; //dummy packet
 
 struct receptionDataPacket
@@ -512,8 +523,10 @@ byte botSpeed;
 
 void processSpeed(int a)
 {
-  if(a<8){botMotionState=STOP;botSpeed=0;}
-  else{botSpeed=map(a,0,4096,0,100);}
+  //if(a<8){botMotionState=STOP;botSpeed=0;}
+  //else{
+    botSpeed=map(a,0,4096,-100,100);
+  //}
 }
 
 void processJoyStickA(int a, int b)
@@ -521,22 +534,22 @@ void processJoyStickA(int a, int b)
   if(a>=3000)
   {
     if(b>=3000)
-    {botMotionState=ROTATE_RIGHT_BACK;}else
+    {botMotionState=ROTATE_LEFT_BACK;}else
     if(b>=1500){botMotionState=MOVE_BACK;}else
-    {botMotionState=ROTATE_LEFT_BACK;}
+    {botMotionState=ROTATE_RIGHT_BACK;}
   }else
   if(a>=1500)
   {
     if(b>=3000)
-    {botMotionState=TURN_RIGHT;}else
+    {botMotionState=TURN_LEFT;}else
     if(b>=1500){botMotionState=BREAK;}else
-    {botMotionState=TURN_LEFT;}
+    {botMotionState=TURN_RIGHT;}
   }else
   {
     if(b>=3000)
-    {botMotionState=ROTATE_RIGHT;}else
+    {botMotionState=ROTATE_LEFT;}else
     if(b>=1500){botMotionState=MOVE_FRONT;}else
-    {botMotionState=ROTATE_LEFT;}
+    {botMotionState=ROTATE_RIGHT;}
   }
   processSpeed(analogRead(potA));
 }
@@ -544,6 +557,7 @@ void processJoyStickA(int a, int b)
 
 
 void processComsData(byte index)
+
 {
   switch (index)
   {
@@ -620,13 +634,13 @@ void setup() {
 
   //Pin directions ===================
   pinMode(buzzer_Pin,OUTPUT);
-  pinMode(encoderA,INPUT_PULLDOWN);
-  pinMode(encoderB,INPUT_PULLDOWN);
+  pinMode(encoderA,INPUT_PULLUP);
+  pinMode(encoderB,INPUT_PULLUP);
   pinMode(button1,INPUT_PULLUP);
-  pinMode(button2,INPUT_PULLDOWN);
+  pinMode(button2,INPUT_PULLUP);
   pinMode(button3,INPUT_PULLUP);
-  pinMode(joystickBtnA,INPUT_PULLDOWN);
-  pinMode(encoderBtn,INPUT_PULLDOWN);
+  pinMode(joystickBtnA,INPUT_PULLUP);
+  pinMode(encoderBtn,INPUT_PULLUP);
   pinMode(joystickA_X,INPUT);
   pinMode(joystickA_Y,INPUT);
   pinMode(joystickB_X,INPUT);
@@ -644,8 +658,13 @@ void setup() {
   oled.setFont(textFont);
   //==================================
 
+  //Init PWM drivers =================
+  ledcSetup(0,1000,12);
+  ledcAttachPin(LED_Pin,0);
+  //==================================
+
   //CPU config =======================
-  setCpuFrequencyMhz(240);
+  // setCpuFrequencyMhz(240);
   debug(getCpuFrequencyMhz())
   //==================================
 
@@ -677,20 +696,37 @@ void setup() {
   //==================================
 
   //Interrupts setting ups ===========
-  attachInterrupt(joystickBtnA,joystickBtnAISR,FALLING);
+  // attachInterrupt(joystickBtnA,joystickBtnAISR,FALLING);
   attachInterrupt(encoderBtn,encoderBtnISR,RISING);
-  attachInterrupt(button1,button1ISR,FALLING);
-  attachInterrupt(button2,button2ISR,FALLING);
-  attachInterrupt(button3,button3ISR,FALLING);
+  // attachInterrupt(button1,button1ISR,FALLING);
+  // attachInterrupt(button2,button2ISR,FALLING);
+  // attachInterrupt(button3,button3ISR,FALLING);
   attachInterrupt(encoderA,encoderClockISR,RISING);
   //==================================
 
   //DAC inits ========================
   buzzer.enable();
-  buzzer.setCwScale(DAC_CW_SCALE_1); //3.3 volts amplitude output
-  buzzer.outputCW(2000); //Buzz a bit to assert dominance.
-  
+  ledcWrite(0,4096);
+  // buzzer.setCwScale(DAC_CW_SCALE_1); //3.3 volts amplitude output
+  // buzzer.outputCW(440); //Buzz a bit to assert dominance.
+  // delay(500);
+   ledcWrite(0,1600);
+  // buzzer.outputCW(390); //Buzz a bit to assert dominance.
+  // delay(600);
+   ledcWrite(0,500);
+  // buzzer.outputCW(1750); //Buzz a bit to assert dominance.
+  // delay(50);
+
+  buzzer.outputCW(300);
+  delay(100);
+  buzzer.outputCW(600);
+  delay(200);
+  buzzer.outputCW(720);
+  delay(300);
+  buzzer.outputCW(0);
+
   buzzer.disable();
+  ledcWrite(0,0);
   oled.clearBuffer();
 
   //side note about playing the tones as we've designed them, use pointers for efficiency. 
@@ -700,12 +736,33 @@ void setup() {
 
 }
 
+unsigned long beepMillis;
+void beep()
+{ 
+  if(isbeeping==1){
+  buzzer.enable();
+  buzzer.outputCW(400);
+  if(millis()-beepMillis>=200)
+  {
+    isbeeping=0;
+  }
+  }else
+  {
+    buzzer.disable();
+  }
+}
+
+unsigned long lastBtnModeMillis;
+bool btnmode=0;
+bool ispressed;
+
 void loop() {
   check_Press();
+  beep();
 
   //Send Data Through the Air
   
-  processJoyStickA(analogRead(joystickA_X),analogRead(joystickA_Y));
+  processJoyStickA(analogRead(joystickA_Y),analogRead(joystickA_X));
   // debug("\n speed: ");debug(botSpeed)
   // debug("\n bot motionstate: ")debug(String(botMotionState,BIN))
   // debug("\n joystickX : ")debug(analogRead(joystickA_X))
@@ -722,14 +779,42 @@ void loop() {
   oled.sendBuffer();
   processComsData(0);
 
-  emission.MotionState = botMotionState;
-  emission.Speed = botSpeed;
+  if(millis()-lastBtnModeMillis >= 200)
+  {
+    if(!ispressed){
+    if(!digitalRead(joystickBtnA))
+    {
+      btnmode=!btnmode;
+      isbeeping=1;
+      ispressed=1;
+    }}else{
+      if(digitalRead(joystickBtnA))
+      {
+        ispressed=0;
+      }
+    }
+    lastBtnModeMillis=millis();
+  }
+
+  if(!digitalRead(encoderBtn))
+  {
+    ledcWrite(0,4050);
+  }else
+  {
+    ledcWrite(0,0);
+  }
+
+  // emission.MotionState = botMotionState;
+  emission.throttle= (abs(map(analogRead(joystickA_Y),0,4096,-1000,1000))*map(analogRead(potA),0,4096,0,100)*0.01)+1000;
+  emission.yawBias= map(analogRead(joystickA_X),0,4096,-100,100);
+  //emission.isEmergencyStop= !digitalRead(button1); 
+  emission.arm_motors = btnmode;
+  emission.rollBias= map(analogRead(joystickB_X),0,4096,-100,100);
+  emission.pitchBias= map(analogRead(joystickB_Y),0,4096,-100,100);
+  // emission.pitch= map(analogRead(joystickB_Y),0,4096,0,180);
 
   if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
   {
     sent_Status=1;
   }else{sent_Status=0;}
 }
-
-
-
