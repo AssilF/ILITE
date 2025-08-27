@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <ArduinoOTA.h>
 #include <u8g2lib.h>
 #include <Wire.h>
 #include <DacESP32.h>
@@ -14,6 +15,10 @@
 #define debug(x) 
 #define verboseON
 #endif
+
+// WiFi credentials used for OTA updates. Replace with actual network values.
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
 
 //Pin Definitions:
 #define buzzer_Pin GPIO_NUM_26//Takes Tunes
@@ -714,6 +719,30 @@ void setup() {
 
   //Init Wifi & ESPNOW ===============
   WiFi.mode(WIFI_STA); //just in case this is what helped with the uncought load prohibition exception.
+  WiFi.begin(ssid, password);
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    delay(500);
+  }
+
+  ArduinoOTA.onStart([]() {
+    Serial.println("OTA Start");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("OTA End");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("OTA Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  ArduinoOTA.begin();
+
   debug("\nwifi loaded\n");
   if (esp_now_init() != ESP_OK) {
   debug("ESPnow said no :(")
@@ -801,6 +830,7 @@ bool btnmode=0;
 bool ispressed;
 
 void loop() {
+  ArduinoOTA.handle();
   check_Press();
   beep();
 
