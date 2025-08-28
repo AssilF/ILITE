@@ -7,6 +7,8 @@
 #include <DacESP32.h>
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
+#include "espnow_discovery.h"
 
 //debug interface
 #define verboseEn 1
@@ -50,6 +52,7 @@ const char* password = "YOUR_PASSWORD";
 //Instances
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 DacESP32 buzzer(buzzer_Pin);
+EspNowDiscovery discovery;
 
 //tasks at the time being, we have no need for this it seems. . . 
 xTaskHandle joystickPollTask = NULL;
@@ -395,6 +398,9 @@ int16_t pidYawHistory[screen_Width];
 // 1 - PID correction graphs
 // 2 - 3D attitude cube with vertical acceleration arrow
 byte displayMode = 0;
+// Index of selected peer in the pairing screen.
+int selectedPeer = 0;
+int lastEncoderCount = 0;
 
 // Accumulated altitude target and yaw command. Joystick deflection adjusts
 // these values incrementally so altitude and yaw are controlled by rate
@@ -410,6 +416,13 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  // If this is a new device, pair with it and remember its address.
+  bool isNewPeer = !esp_now_is_peer_exist(mac);
+  discovery.handleIncoming(mac, incomingData, len);
+  if (isNewPeer) {
+    memcpy(targetAddress, mac, 6);
+  }
+
   // Copy telemetry data from the incoming packet. The drone is expected to
   // send a telemetryPacket structure defined above.
   memcpy(&telemetry, incomingData, sizeof(telemetry));
@@ -467,6 +480,14 @@ void drawTelemetryInfo(){
   oled.setCursor(64,25); oled.print("R:");    oled.print(telemetry.roll);
   oled.setCursor(0,40);  oled.print("Y:");    oled.print(telemetry.yaw);
   oled.setCursor(64,40); oled.print("Acc:");  oled.print(telemetry.accelZ);
+  // Connection status icon in the top right
+  oled.setFont(iconFont);
+  oled.setCursor(112,10);
+  if(discovery.hasPeers()){
+    oled.print(checkIcon);
+  }else{
+    oled.print(alertIcon);
+  }
   oled.sendBuffer();
 }
 
@@ -554,6 +575,35 @@ void drawOrientationCube(){
                       cx+3, head + (arrowLen>0?-5:5));
   }
 
+  oled.sendBuffer();
+}
+
+// Simple pairing menu displaying connected peers. Press the encoder
+// button to trigger a new discovery broadcast.
+void drawPairingMenu(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+  oled.setCursor(0,10);
+  oled.print("Pairing");
+
+  int count = discovery.getPeerCount();
+  if(count == 0){
+    oled.setCursor(0,30);
+    oled.print("No peers");
+  } else {
+    for(int i=0;i<count && i<4;i++){
+      const uint8_t *mac = discovery.getPeer(i);
+      oled.setCursor(0, 20 + i*12);
+      if(i==selectedPeer) oled.print(">"); else oled.print(" ");
+      char buf[18];
+      sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
+              mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+      oled.print(buf);
+    }
+  }
+
+  oled.setCursor(0,60);
+  oled.print("Press to scan");
   oled.sendBuffer();
 }
 
@@ -904,13 +954,15 @@ void setup() {
   while(1){oled.drawStr(0,15,"someting wong wit ya bot ID");  oled.sendBuffer();delay(5000);}
   }debug("peer added \n")
 
-  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated 
-  
+  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated
+
   oled.clear();
   oled.sendBuffer();
   oled.drawStr(0,32,"Found'e bot ;)");
   oled.sendBuffer();
   delay(1000);debug("Coms in place\n\n")
+  discovery.begin();
+  discovery.discover();
   //==================================
 
   //Interrupts setting ups ===========
@@ -1018,8 +1070,27 @@ void loop() {
   // Change display mode when the encoder button is pressed.
   if(encoderBtnState){
     encoderBtnState = 0;
-    displayMode = (displayMode + 1) % 3;
+    if(displayMode == 3){
+      discovery.discover();
+    } else {
+      displayMode = (displayMode + 1) % 4;
+      if(displayMode == 3){
+        lastEncoderCount = encoderCount;
+        selectedPeer = 0;
+      }
+    }
     isbeeping = 1; // audible feedback
+  }
+
+  // When in the pairing menu, use encoder rotation to select peers.
+  if(displayMode == 3){
+    int delta = encoderCount - lastEncoderCount;
+    int count = discovery.getPeerCount();
+    if(delta != 0 && count > 0){
+      selectedPeer = (selectedPeer + delta) % count;
+      if(selectedPeer < 0) selectedPeer += count;
+      lastEncoderCount = encoderCount;
+    }
   }
 
   // Populate packet with desired control values
@@ -1047,6 +1118,7 @@ void loop() {
     case 0: drawTelemetryInfo(); break;
     case 1: drawPidGraphs(); break;
     case 2: drawOrientationCube(); break;
+    case 3: drawPairingMenu(); break;
   }
 
   // Send packet via ESP-NOW
