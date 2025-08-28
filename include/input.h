@@ -1,4 +1,6 @@
 #pragma once
+#ifndef INPUT_H
+#define INPUT_H
 #include <Arduino.h>
 
 constexpr uint8_t encoderA = 16; // clock
@@ -31,3 +33,4 @@ extern volatile unsigned long encoderBtnMillis;
 
 void initInput();
 void checkPress();
+#endif

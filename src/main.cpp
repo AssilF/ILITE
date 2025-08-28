@@ -42,9 +42,6 @@ bool isbeeping=1;
 bool botmode=0;
 bool lastbtn;
 
-void checkPress(){
-  // placeholder for button state housekeeping
-}
 
 
 int botX;
