@@ -5,6 +5,8 @@
 #include <u8g2lib.h>
 #include <Wire.h>
 #include <DacESP32.h>
+#include <math.h>
+#include <string.h>
 
 //debug interface
 #define verboseEn 1
@@ -365,6 +367,35 @@ struct receptionDataPacket
   byte okIndex;
 }reception;
 
+// Telemetry packet received from the drone containing the key
+// stability variables. All values are kept small to remain well
+// under the 250 byte ESP-NOW limit.
+struct telemetryPacket
+{
+  int16_t pitch;      // Current pitch angle in degrees
+  int16_t roll;       // Current roll angle in degrees
+  int16_t yaw;        // Current yaw angle in degrees
+  int16_t altitude;   // Current altitude in centimetres
+  int16_t pidPitch;   // PID correction for pitch
+  int16_t pidRoll;    // PID correction for roll
+  int16_t pidYaw;     // PID correction for yaw
+  int16_t accelZ;     // Vertical acceleration (Z axis)
+}telemetry;
+
+// History buffers for drawing PID graphs on the OLED. Each buffer
+// stores the last screen_Width samples so the graph spans the full
+// display width.
+int16_t pidPitchHistory[screen_Width];
+int16_t pidRollHistory[screen_Width];
+int16_t pidYawHistory[screen_Width];
+
+// Index of the newest sample in the history buffers.
+// Current display mode toggled with the encoder push button.
+// 0 - information screen
+// 1 - PID correction graphs
+// 2 - 3D attitude cube with vertical acceleration arrow
+byte displayMode = 0;
+
 // Accumulated altitude target and yaw command. Joystick deflection adjusts
 // these values incrementally so altitude and yaw are controlled by rate
 // rather than absolute joystick position.
@@ -379,7 +410,18 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  memcpy(&reception, incomingData, sizeof(reception));
+  // Copy telemetry data from the incoming packet. The drone is expected to
+  // send a telemetryPacket structure defined above.
+  memcpy(&telemetry, incomingData, sizeof(telemetry));
+
+  // Update PID history buffers for the graphing screen. The oldest sample is
+  // discarded and the newest sample appended to the end of each buffer.
+  memmove(pidPitchHistory, pidPitchHistory + 1, (screen_Width - 1) * sizeof(int16_t));
+  memmove(pidRollHistory,  pidRollHistory  + 1, (screen_Width - 1) * sizeof(int16_t));
+  memmove(pidYawHistory,   pidYawHistory   + 1, (screen_Width - 1) * sizeof(int16_t));
+  pidPitchHistory[screen_Width - 1] = telemetry.pidPitch;
+  pidRollHistory[screen_Width - 1]  = telemetry.pidRoll;
+  pidYawHistory[screen_Width - 1]   = telemetry.pidYaw;
 }
 
 // Simple UI for displaying the current command values for Drongaz.
@@ -408,6 +450,109 @@ void drawDrongazInterface(){
   oled.setCursor(0,45);
   oled.print("Y:");
   oled.print(emission.yawAngle);
+
+  oled.sendBuffer();
+}
+
+// -----------------------------------------------------------------------------
+// Telemetry display helpers
+// -----------------------------------------------------------------------------
+
+// Draw a simple information screen with numeric telemetry values.
+void drawTelemetryInfo(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+  oled.setCursor(0,10);  oled.print("Alt:");  oled.print(telemetry.altitude);
+  oled.setCursor(0,25);  oled.print("P:");    oled.print(telemetry.pitch);
+  oled.setCursor(64,25); oled.print("R:");    oled.print(telemetry.roll);
+  oled.setCursor(0,40);  oled.print("Y:");    oled.print(telemetry.yaw);
+  oled.setCursor(64,40); oled.print("Acc:");  oled.print(telemetry.accelZ);
+  oled.sendBuffer();
+}
+
+// Draw rolling graphs of the PID corrections for pitch, roll and yaw.
+void drawPidGraphs(){
+  oled.clearBuffer();
+
+  for(int x=1; x<screen_Width; x++){
+    // Pitch graph (top third)
+    oled.drawLine(x-1, map(pidPitchHistory[x-1], -500, 500, 20, 0),
+                  x,   map(pidPitchHistory[x],   -500, 500, 20, 0));
+    // Roll graph (middle third)
+    oled.drawLine(x-1, map(pidRollHistory[x-1],  -500, 500, 42, 22),
+                  x,   map(pidRollHistory[x],    -500, 500, 42, 22));
+    // Yaw graph (bottom third)
+    oled.drawLine(x-1, map(pidYawHistory[x-1],   -500, 500, 64, 44),
+                  x,   map(pidYawHistory[x],     -500, 500, 64, 44));
+  }
+
+  // Divider lines between graphs
+  oled.drawLine(0,21,screen_Width,21);
+  oled.drawLine(0,43,screen_Width,43);
+  oled.sendBuffer();
+}
+
+// Draw a 3D cube representing the drone's attitude. Vertical acceleration is
+// displayed as an arrow at the centre of the cube.
+void drawOrientationCube(){
+  oled.clearBuffer();
+
+  const float size = 15.0f;
+  const int cx = screen_Width/2;
+  const int cy = screen_Height/2;
+  struct Vec3 { float x,y,z; };
+  const Vec3 verts[8] = {
+    {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
+    {-size,-size, size}, { size,-size, size}, { size, size, size}, {-size, size, size}
+  };
+
+  int px[8];
+  int py[8];
+  float roll  = telemetry.roll  * DEG_TO_RAD;
+  float pitch = telemetry.pitch * DEG_TO_RAD;
+  float yaw   = telemetry.yaw   * DEG_TO_RAD;
+
+  for(int i=0;i<8;i++){
+    float x=verts[i].x;
+    float y=verts[i].y;
+    float z=verts[i].z;
+
+    // Rotation around X (roll)
+    float y1 = y*cos(roll) - z*sin(roll);
+    float z1 = y*sin(roll) + z*cos(roll);
+    y = y1; z = z1;
+    // Rotation around Y (pitch)
+    float x1 = x*cos(pitch) + z*sin(pitch);
+    float z2 = -x*sin(pitch) + z*cos(pitch);
+    x = x1; z = z2;
+    // Rotation around Z (yaw)
+    float x2 = x*cos(yaw) - y*sin(yaw);
+    float y2 = x*sin(yaw) + y*cos(yaw);
+    x = x2; y = y2;
+
+    px[i] = cx + (int)x;
+    py[i] = cy - (int)y;
+  }
+
+  const uint8_t edges[12][2] = {
+    {0,1},{1,2},{2,3},{3,0},
+    {4,5},{5,6},{6,7},{7,4},
+    {0,4},{1,5},{2,6},{3,7}
+  };
+
+  for(int i=0;i<12;i++){
+    oled.drawLine(px[edges[i][0]], py[edges[i][0]],
+                  px[edges[i][1]], py[edges[i][1]]);
+  }
+
+  // Vertical acceleration arrow
+  int arrowLen = map(telemetry.accelZ, -1000, 1000, -20, 20);
+  oled.drawLine(cx, cy, cx, cy - arrowLen);
+  if(arrowLen != 0){
+    int head = cy - arrowLen;
+    oled.drawTriangle(cx, head, cx-3, head + (arrowLen>0?-5:5),
+                      cx+3, head + (arrowLen>0?-5:5));
+  }
 
   oled.sendBuffer();
 }
@@ -870,6 +1015,13 @@ void loop() {
     ledcWrite(0,0);
   }
 
+  // Change display mode when the encoder button is pressed.
+  if(encoderBtnState){
+    encoderBtnState = 0;
+    displayMode = (displayMode + 1) % 3;
+    isbeeping = 1; // audible feedback
+  }
+
   // Populate packet with desired control values
   // Altitude is controlled incrementally: joystick deflection adjusts the
   // accumulated altitude target rather than sending raw throttle. Releasing
@@ -890,8 +1042,12 @@ void loop() {
   emission.pitchAngle = map(analogRead(joystickB_Y),0,4096,-90,90);
   emission.arm_motors = btnmode;
 
-  // Update OLED with current command values
-  drawDrongazInterface();
+  // Update OLED with the selected telemetry view
+  switch(displayMode){
+    case 0: drawTelemetryInfo(); break;
+    case 1: drawPidGraphs(); break;
+    case 2: drawOrientationCube(); break;
+  }
 
   // Send packet via ESP-NOW
   if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
