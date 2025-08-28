@@ -72,6 +72,8 @@ byte speedTarget;
 byte linePosition = B00001010;
 byte firePose = 90;
 
+int pidGraphIndex = 0;
+
 int LM_Line=99;
 int RM_Line=999;
 int L_Line=99;
@@ -96,6 +98,16 @@ int screen = 1;
 void initDisplay(){
   oled.begin();
   oled.setFont(textFont);
+}
+
+void drawHeader(const char* title){
+  oled.setDrawColor(1);
+  oled.drawBox(0,0,screen_Width,12);
+  oled.setDrawColor(0);
+  oled.setFont(textFont);
+  oled.setCursor(2,10);
+  oled.print(title);
+  oled.setDrawColor(1);
 }
 
 void drawStatus(){
@@ -197,14 +209,15 @@ void drawDrongazInterface(){
 
 void drawTelemetryInfo(){
   oled.clearBuffer();
+  drawHeader("Telemetry");
   oled.setFont(textFont);
-  oled.setCursor(0,10);  oled.print("Alt:");  oled.print(telemetry.altitude);
-  oled.setCursor(0,25);  oled.print("P:");    oled.print(telemetry.pitch);
-  oled.setCursor(64,25); oled.print("R:");    oled.print(telemetry.roll);
-  oled.setCursor(0,40);  oled.print("Y:");    oled.print(telemetry.yaw);
-  oled.setCursor(64,40); oled.print("Acc:");  oled.print(telemetry.accelZ);
+  oled.setCursor(0,22);  oled.print("Alt:");  oled.print(telemetry.altitude);
+  oled.setCursor(0,37);  oled.print("P:");    oled.print(telemetry.pitch);
+  oled.setCursor(64,37); oled.print("R:");    oled.print(telemetry.roll);
+  oled.setCursor(0,52);  oled.print("Y:");    oled.print(telemetry.yaw);
+  oled.setCursor(64,52); oled.print("Acc:");  oled.print(telemetry.accelZ);
   oled.setFont(iconFont);
-  oled.setCursor(112,10);
+  oled.setCursor(112,22);
   if(discovery.hasPeers()){
     oled.print(checkIcon);
   }else{
@@ -214,27 +227,32 @@ void drawTelemetryInfo(){
   oled.sendBuffer();
 }
 
-void drawPidGraphs(){
+void drawPidGraph(){
   oled.clearBuffer();
-  for(int x=1; x<screen_Width; x++){
-    oled.drawLine(x-1, map(pidPitchHistory[x-1], -500, 500, 20, 0),
-                  x,   map(pidPitchHistory[x],   -500, 500, 20, 0));
-    oled.drawLine(x-1, map(pidRollHistory[x-1],  -500, 500, 42, 22),
-                  x,   map(pidRollHistory[x],    -500, 500, 42, 22));
-    oled.drawLine(x-1, map(pidYawHistory[x-1],   -500, 500, 64, 44),
-                  x,   map(pidYawHistory[x],     -500, 500, 64, 44));
+  int16_t* history;
+  const char* label;
+  switch(pidGraphIndex){
+    case 0: history = pidPitchHistory; label = "Pitch"; break;
+    case 1: history = pidRollHistory;  label = "Roll";  break;
+    default: history = pidYawHistory; label = "Yaw";   break;
   }
-  oled.drawLine(0,21,screen_Width,21);
-  oled.drawLine(0,43,screen_Width,43);
+  char title[16];
+  snprintf(title, sizeof(title), "PID %s", label);
+  drawHeader(title);
+  for(int x=1; x<screen_Width; x++){
+    oled.drawLine(x-1, map(history[x-1], -500, 500, screen_Height-1, 13),
+                  x,   map(history[x],   -500, 500, screen_Height-1, 13));
+  }
   drawHomeFooter();
   oled.sendBuffer();
 }
 
 void drawOrientationCube(){
   oled.clearBuffer();
+  drawHeader("Orientation");
   const float size = 15.0f;
   const int cx = screen_Width/2;
-  const int cy = screen_Height/2;
+  const int cy = screen_Height/2 + 6;
   struct Vec3 { float x,y,z; };
   const Vec3 verts[8] = {
     {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
@@ -283,20 +301,19 @@ void drawOrientationCube(){
 
 void drawPairingMenu(){
   oled.clearBuffer();
+  drawHeader("Pairing");
   oled.setFont(textFont);
-  oled.setCursor(0,10);
-  oled.print("Pairing");
   int count = discovery.getPeerCount();
   for(int i=0;i<count && i<4;i++){
     const uint8_t *mac = discovery.getPeer(i);
-    oled.setCursor(0, 20 + i*12);
+    oled.setCursor(0, 22 + i*12);
     if(i==selectedPeer) oled.print(">"); else oled.print(" ");
     char buf[18];
     sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
             mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
     oled.print(buf);
   }
-  oled.setCursor(0, 20 + count*12);
+  oled.setCursor(0, 22 + count*12);
   if(selectedPeer == count) oled.print(">"); else oled.print(" ");
   oled.print("Home");
   oled.sendBuffer();
@@ -304,10 +321,11 @@ void drawPairingMenu(){
 
 void drawHomeMenu(){
   oled.clearBuffer();
+  drawHeader("Menu");
   oled.setFont(textFont);
-  const char* items[] = {"Telemetry","PID Graphs","Orientation","Pairing"};
+  const char* items[] = {"Telemetry","PID Graph","Orientation","Pairing"};
   for(int i=0;i<4;i++){
-    oled.setCursor(0,10 + i*12);
+    oled.setCursor(0,22 + i*12);
     if(i==homeMenuIndex) oled.print(">"); else oled.print(" ");
     oled.print(items[i]);
   }

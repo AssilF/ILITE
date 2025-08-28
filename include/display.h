@@ -39,7 +39,8 @@ void drawMotionJoystickPose();
 void drawPeripheralJoystickPose();
 void drawDrongazInterface();
 void drawTelemetryInfo();
-void drawPidGraphs();
+// Draw a single PID graph based on the currently selected axis
+void drawPidGraph();
 void drawOrientationCube();
 void drawPairingMenu();
 void drawHomeMenu();
@@ -49,3 +50,9 @@ void Line_detection();
 void Pid_Tuner();
 void Fire_detection();
 void displayMenu();
+
+// Utility helpers
+void drawHeader(const char* title);
+
+// Currently selected PID graph index (0=pitch,1=roll,2=yaw)
+extern int pidGraphIndex;
