@@ -17,8 +17,8 @@
 #endif
 
 // WiFi credentials used for OTA updates. Replace with actual network values.
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
+const char* ssid = "ILITE PORT";
+const char* password = "ASCE321#";
 
 //Pin Definitions:
 #define buzzer_Pin GPIO_NUM_26//Takes Tunes
@@ -350,9 +350,9 @@ struct emissionDataPacket
     // hold this altitude using its own PID controller.
     uint16_t altitude;
     // Desired attitude angles in degrees.
-    int16_t pitchAngle;
-    int16_t rollAngle;
-    int16_t yawAngle;
+    int8_t pitchAngle;
+    int8_t rollAngle;
+    int8_t yawAngle;
     // Motor arming flag.
     bool arm_motors;
 }emission; // packet to be emitted
@@ -718,12 +718,9 @@ void setup() {
   //==================================
 
   //Init Wifi & ESPNOW ===============
-  WiFi.mode(WIFI_STA); //just in case this is what helped with the uncought load prohibition exception.
-  WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    delay(500);
-  }
-
+  WiFi.mode(WIFI_AP_STA); //just in case this is what helped with the uncought load prohibition exception.
+  WiFi.softAP(ssid, password);
+  Serial.println("Wifi ON");
   ArduinoOTA.onStart([]() {
     Serial.println("OTA Start");
   });
@@ -874,7 +871,8 @@ void loop() {
   // Altitude is controlled incrementally: joystick deflection adjusts the
   // accumulated altitude target rather than sending raw throttle. Releasing
   // the joystick commands the craft to hold the new altitude.
-  int16_t altDelta = map(analogRead(joystickA_Y),0,4096,-20,20);
+  int maxClimbRate = map(analogRead(potA), 0, 4095, 0, 200); // 0-50 cm per loop
+  int16_t altDelta = map(analogRead(joystickA_Y), 0, 4096, -maxClimbRate, maxClimbRate);
   if (abs(altDelta) < 2) altDelta = 0; // small deadband to prevent drift
   altitudeTarget = constrain(altitudeTarget + altDelta, 0, 2000);
   emission.altitude = altitudeTarget;
