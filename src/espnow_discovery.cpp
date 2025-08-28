@@ -9,8 +9,8 @@ struct DiscoveryMessage {
 };
 
 void EspNowDiscovery::begin() {
-    // Ensure we're in station mode so broadcasts are received.
-    WiFi.mode(WIFI_STA);
+    // Ensure station + AP mode so OTA soft AP remains active.
+    WiFi.mode(WIFI_AP_STA);
     // Record any existing peers (e.g. pre-configured target).
     esp_now_peer_num_t count{};
     if (esp_now_get_peer_num(&count) == ESP_OK) {

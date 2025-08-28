@@ -9,8 +9,8 @@
 // message and pairs with any responding peers.
 class EspNowDiscovery {
 public:
-    // Ensure WiFi is in STA mode; ESP-NOW should already be initialised
-    // by the caller.
+    // Ensure WiFi remains in AP+STA mode so OTA soft AP stays available;
+    // ESP-NOW should already be initialised by the caller.
     void begin();
     // Broadcast a discovery message to any nearby devices.
     void discover();
