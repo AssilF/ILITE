@@ -325,6 +325,8 @@ void setup() {
   oled.sendBuffer();
   delay(1000);debug("Coms in place\n\n")
   discovery.begin();
+  // Re-enable Soft AP in case discovery initialization resets WiFi.
+  WiFi.softAP(ssid, password);
   discovery.discover();
   //==================================
 
