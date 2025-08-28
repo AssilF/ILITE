@@ -5,6 +5,10 @@
 #include <u8g2lib.h>
 #include <Wire.h>
 #include <DacESP32.h>
+#include <math.h>
+#include <string.h>
+#include <stdio.h>
+#include "espnow_discovery.h"
 
 //debug interface
 #define verboseEn 1
@@ -48,6 +52,7 @@ const char* password = "ASCE321#";
 //Instances
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 DacESP32 buzzer(buzzer_Pin);
+EspNowDiscovery discovery;
 
 //tasks at the time being, we have no need for this it seems. . . 
 xTaskHandle joystickPollTask = NULL;
@@ -365,6 +370,46 @@ struct receptionDataPacket
   byte okIndex;
 }reception;
 
+// Telemetry packet received from the drone containing the key
+// stability variables. All values are kept small to remain well
+// under the 250 byte ESP-NOW limit.
+struct telemetryPacket
+{
+  int16_t pitch;      // Current pitch angle in degrees
+  int16_t roll;       // Current roll angle in degrees
+  int16_t yaw;        // Current yaw angle in degrees
+  int16_t altitude;   // Current altitude in centimetres
+  int16_t pidPitch;   // PID correction for pitch
+  int16_t pidRoll;    // PID correction for roll
+  int16_t pidYaw;     // PID correction for yaw
+  int16_t accelZ;     // Vertical acceleration (Z axis)
+}telemetry;
+
+// History buffers for drawing PID graphs on the OLED. Each buffer
+// stores the last screen_Width samples so the graph spans the full
+// display width.
+int16_t pidPitchHistory[screen_Width];
+int16_t pidRollHistory[screen_Width];
+int16_t pidYawHistory[screen_Width];
+
+// Index of the newest sample in the history buffers.
+// Current page displayed on the OLED.
+// 0 - Home menu
+// 1 - Telemetry information screen
+// 2 - PID correction graphs
+// 3 - 3D attitude cube with vertical acceleration arrow
+// 4 - Pairing menu
+byte displayMode = 0;
+// Index of selected peer in the pairing screen.
+int selectedPeer = 0;
+int lastEncoderCount = 0;
+// Index of highlighted entry in the home menu.
+int homeMenuIndex = 0;
+// Whether the "Home" option is highlighted on sub-pages.
+bool homeSelected = false;
+// Timestamp of the last discovery broadcast.
+unsigned long lastDiscoveryTime = 0;
+
 // Accumulated altitude target and yaw command. Joystick deflection adjusts
 // these values incrementally so altitude and yaw are controlled by rate
 // rather than absolute joystick position.
@@ -379,7 +424,25 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  memcpy(&reception, incomingData, sizeof(reception));
+  // If this is a new device, pair with it and remember its address.
+  bool isNewPeer = !esp_now_is_peer_exist(mac);
+  discovery.handleIncoming(mac, incomingData, len);
+  if (isNewPeer) {
+    memcpy(targetAddress, mac, 6);
+  }
+
+  // Copy telemetry data from the incoming packet. The drone is expected to
+  // send a telemetryPacket structure defined above.
+  memcpy(&telemetry, incomingData, sizeof(telemetry));
+
+  // Update PID history buffers for the graphing screen. The oldest sample is
+  // discarded and the newest sample appended to the end of each buffer.
+  memmove(pidPitchHistory, pidPitchHistory + 1, (screen_Width - 1) * sizeof(int16_t));
+  memmove(pidRollHistory,  pidRollHistory  + 1, (screen_Width - 1) * sizeof(int16_t));
+  memmove(pidYawHistory,   pidYawHistory   + 1, (screen_Width - 1) * sizeof(int16_t));
+  pidPitchHistory[screen_Width - 1] = telemetry.pidPitch;
+  pidRollHistory[screen_Width - 1]  = telemetry.pidRoll;
+  pidYawHistory[screen_Width - 1]   = telemetry.pidYaw;
 }
 
 // Simple UI for displaying the current command values for Drongaz.
@@ -410,6 +473,168 @@ void drawDrongazInterface(){
   oled.print(emission.yawAngle);
 
   oled.sendBuffer();
+}
+
+// -----------------------------------------------------------------------------
+// Telemetry display helpers
+// -----------------------------------------------------------------------------
+
+// Draw a simple information screen with numeric telemetry values.
+void drawTelemetryInfo(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+  oled.setCursor(0,10);  oled.print("Alt:");  oled.print(telemetry.altitude);
+  oled.setCursor(0,25);  oled.print("P:");    oled.print(telemetry.pitch);
+  oled.setCursor(64,25); oled.print("R:");    oled.print(telemetry.roll);
+  oled.setCursor(0,40);  oled.print("Y:");    oled.print(telemetry.yaw);
+  oled.setCursor(64,40); oled.print("Acc:");  oled.print(telemetry.accelZ);
+  // Connection status icon in the top right
+  oled.setFont(iconFont);
+  oled.setCursor(112,10);
+  if(discovery.hasPeers()){
+    oled.print(checkIcon);
+  }else{
+    oled.print(alertIcon);
+  }
+  drawHomeFooter();
+  oled.sendBuffer();
+}
+
+// Draw rolling graphs of the PID corrections for pitch, roll and yaw.
+void drawPidGraphs(){
+  oled.clearBuffer();
+
+  for(int x=1; x<screen_Width; x++){
+    // Pitch graph (top third)
+    oled.drawLine(x-1, map(pidPitchHistory[x-1], -500, 500, 20, 0),
+                  x,   map(pidPitchHistory[x],   -500, 500, 20, 0));
+    // Roll graph (middle third)
+    oled.drawLine(x-1, map(pidRollHistory[x-1],  -500, 500, 42, 22),
+                  x,   map(pidRollHistory[x],    -500, 500, 42, 22));
+    // Yaw graph (bottom third)
+    oled.drawLine(x-1, map(pidYawHistory[x-1],   -500, 500, 64, 44),
+                  x,   map(pidYawHistory[x],     -500, 500, 64, 44));
+  }
+
+  // Divider lines between graphs
+  oled.drawLine(0,21,screen_Width,21);
+  oled.drawLine(0,43,screen_Width,43);
+  drawHomeFooter();
+  oled.sendBuffer();
+}
+
+// Draw a 3D cube representing the drone's attitude. Vertical acceleration is
+// displayed as an arrow at the centre of the cube.
+void drawOrientationCube(){
+  oled.clearBuffer();
+
+  const float size = 15.0f;
+  const int cx = screen_Width/2;
+  const int cy = screen_Height/2;
+  struct Vec3 { float x,y,z; };
+  const Vec3 verts[8] = {
+    {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
+    {-size,-size, size}, { size,-size, size}, { size, size, size}, {-size, size, size}
+  };
+
+  int px[8];
+  int py[8];
+  float roll  = telemetry.roll  * DEG_TO_RAD;
+  float pitch = telemetry.pitch * DEG_TO_RAD;
+  float yaw   = telemetry.yaw   * DEG_TO_RAD;
+
+  for(int i=0;i<8;i++){
+    float x=verts[i].x;
+    float y=verts[i].y;
+    float z=verts[i].z;
+
+    // Rotation around X (roll)
+    float y1 = y*cos(roll) - z*sin(roll);
+    float z1 = y*sin(roll) + z*cos(roll);
+    y = y1; z = z1;
+    // Rotation around Y (pitch)
+    float x1 = x*cos(pitch) + z*sin(pitch);
+    float z2 = -x*sin(pitch) + z*cos(pitch);
+    x = x1; z = z2;
+    // Rotation around Z (yaw)
+    float x2 = x*cos(yaw) - y*sin(yaw);
+    float y2 = x*sin(yaw) + y*cos(yaw);
+    x = x2; y = y2;
+
+    px[i] = cx + (int)x;
+    py[i] = cy - (int)y;
+  }
+
+  const uint8_t edges[12][2] = {
+    {0,1},{1,2},{2,3},{3,0},
+    {4,5},{5,6},{6,7},{7,4},
+    {0,4},{1,5},{2,6},{3,7}
+  };
+
+  for(int i=0;i<12;i++){
+    oled.drawLine(px[edges[i][0]], py[edges[i][0]],
+                  px[edges[i][1]], py[edges[i][1]]);
+  }
+
+  // Vertical acceleration arrow
+  int arrowLen = map(telemetry.accelZ, -1000, 1000, -20, 20);
+  oled.drawLine(cx, cy, cx, cy - arrowLen);
+  if(arrowLen != 0){
+    int head = cy - arrowLen;
+    oled.drawTriangle(cx, head, cx-3, head + (arrowLen>0?-5:5),
+                      cx+3, head + (arrowLen>0?-5:5));
+  }
+
+  drawHomeFooter();
+  oled.sendBuffer();
+}
+
+// Simple pairing menu displaying discovered peers. A "Home" entry at the
+// bottom allows exiting back to the main menu.
+void drawPairingMenu(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+  oled.setCursor(0,10);
+  oled.print("Pairing");
+
+  int count = discovery.getPeerCount();
+  for(int i=0;i<count && i<4;i++){
+    const uint8_t *mac = discovery.getPeer(i);
+    oled.setCursor(0, 20 + i*12);
+    if(i==selectedPeer) oled.print(">"); else oled.print(" ");
+    char buf[18];
+    sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
+            mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+    oled.print(buf);
+  }
+
+  // Home option after the list of peers
+  oled.setCursor(0, 20 + count*12);
+  if(selectedPeer == count) oled.print(">"); else oled.print(" ");
+  oled.print("Home");
+
+  oled.sendBuffer();
+}
+
+// Main home screen that lets the user choose which page to open.
+void drawHomeMenu(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+  const char* items[] = {"Telemetry","PID Graphs","Orientation","Pairing"};
+  for(int i=0;i<4;i++){
+    oled.setCursor(0,10 + i*12);
+    if(i==homeMenuIndex) oled.print(">"); else oled.print(" ");
+    oled.print(items[i]);
+  }
+  oled.sendBuffer();
+}
+
+// Draw a "Home" option at the bottom of the screen. When homeSelected is
+// true, the option is highlighted with an arrow.
+void drawHomeFooter(){
+  oled.setCursor(0,60);
+  if(homeSelected) oled.print(">"); else oled.print(" ");
+  oled.print("Home");
 }
 
 
@@ -756,13 +981,15 @@ void setup() {
   while(1){oled.drawStr(0,15,"someting wong wit ya bot ID");  oled.sendBuffer();delay(5000);}
   }debug("peer added \n")
 
-  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated 
-  
+  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated
+
   oled.clear();
   oled.sendBuffer();
   oled.drawStr(0,32,"Found'e bot ;)");
   oled.sendBuffer();
   delay(1000);debug("Coms in place\n\n")
+  discovery.begin();
+  discovery.discover();
   //==================================
 
   //Interrupts setting ups ===========
@@ -867,6 +1094,71 @@ void loop() {
     ledcWrite(0,0);
   }
 
+  // Automatic discovery while in the pairing menu.
+  if(displayMode == 4 && millis() - lastDiscoveryTime > 2000){
+    discovery.discover();
+    lastDiscoveryTime = millis();
+  }
+
+  // Handle encoder rotation depending on the current page.
+  if(displayMode == 0){
+    int delta = encoderCount - lastEncoderCount;
+    int menuCount = 4;
+    if(delta != 0){
+      homeMenuIndex = (homeMenuIndex + delta) % menuCount;
+      if(homeMenuIndex < 0) homeMenuIndex += menuCount;
+      lastEncoderCount = encoderCount;
+    }
+  } else if(displayMode == 4){
+    int delta = encoderCount - lastEncoderCount;
+    int count = discovery.getPeerCount() + 1; // include Home option
+    if(delta != 0 && count > 0){
+      selectedPeer = (selectedPeer + delta) % count;
+      if(selectedPeer < 0) selectedPeer += count;
+      lastEncoderCount = encoderCount;
+    }
+  } else {
+    int delta = encoderCount - lastEncoderCount;
+    if(delta != 0){
+      homeSelected = !homeSelected;
+      lastEncoderCount = encoderCount;
+    }
+  }
+
+  // Handle encoder button presses for navigation.
+  if(encoderBtnState){
+    encoderBtnState = 0;
+    if(displayMode == 0){
+      switch(homeMenuIndex){
+        case 0: displayMode = 1; break;
+        case 1: displayMode = 2; break;
+        case 2: displayMode = 3; break;
+        case 3: displayMode = 4; selectedPeer = 0; break;
+      }
+      lastEncoderCount = encoderCount;
+      homeSelected = false;
+    } else if(displayMode == 4){
+      int count = discovery.getPeerCount();
+      if(selectedPeer == count){
+        displayMode = 0;
+        homeMenuIndex = 0;
+        homeSelected = false;
+        lastEncoderCount = encoderCount;
+      } else if(count > 0){
+        const uint8_t *mac = discovery.getPeer(selectedPeer);
+        memcpy(targetAddress, mac, 6);
+      }
+    } else {
+      if(homeSelected){
+        displayMode = 0;
+        homeMenuIndex = 0;
+        homeSelected = false;
+        lastEncoderCount = encoderCount;
+      }
+    }
+    isbeeping = 1; // audible feedback
+  }
+
   // Populate packet with desired control values
   // Altitude is controlled incrementally: joystick deflection adjusts the
   // accumulated altitude target rather than sending raw throttle. Releasing
@@ -888,8 +1180,14 @@ void loop() {
   emission.pitchAngle = map(analogRead(joystickB_Y),0,4096,-90,90);
   emission.arm_motors = btnmode;
 
-  // Update OLED with current command values
-  drawDrongazInterface();
+  // Update OLED with the selected telemetry view
+  switch(displayMode){
+    case 0: drawHomeMenu(); break;
+    case 1: drawTelemetryInfo(); break;
+    case 2: drawPidGraphs(); break;
+    case 3: drawOrientationCube(); break;
+    case 4: drawPairingMenu(); break;
+  }
 
   // Send packet via ESP-NOW
   if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
