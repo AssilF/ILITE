@@ -36,3 +36,4 @@ extern telemetryPacket telemetry;
 extern int16_t pidPitchHistory[screen_Width];
 extern int16_t pidRollHistory[screen_Width];
 extern int16_t pidYawHistory[screen_Width];
+void appendPidSample();
