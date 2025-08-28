@@ -7,6 +7,8 @@
 #include <DacESP32.h>
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
+#include "espnow_discovery.h"
 
 //debug interface
 #define verboseEn 1
@@ -50,6 +52,7 @@ const char* password = "YOUR_PASSWORD";
 //Instances
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 DacESP32 buzzer(buzzer_Pin);
+EspNowDiscovery discovery;
 
 //tasks at the time being, we have no need for this it seems. . . 
 xTaskHandle joystickPollTask = NULL;
@@ -390,11 +393,22 @@ int16_t pidRollHistory[screen_Width];
 int16_t pidYawHistory[screen_Width];
 
 // Index of the newest sample in the history buffers.
-// Current display mode toggled with the encoder push button.
-// 0 - information screen
-// 1 - PID correction graphs
-// 2 - 3D attitude cube with vertical acceleration arrow
+// Current page displayed on the OLED.
+// 0 - Home menu
+// 1 - Telemetry information screen
+// 2 - PID correction graphs
+// 3 - 3D attitude cube with vertical acceleration arrow
+// 4 - Pairing menu
 byte displayMode = 0;
+// Index of selected peer in the pairing screen.
+int selectedPeer = 0;
+int lastEncoderCount = 0;
+// Index of highlighted entry in the home menu.
+int homeMenuIndex = 0;
+// Whether the "Home" option is highlighted on sub-pages.
+bool homeSelected = false;
+// Timestamp of the last discovery broadcast.
+unsigned long lastDiscoveryTime = 0;
 
 // Accumulated altitude target and yaw command. Joystick deflection adjusts
 // these values incrementally so altitude and yaw are controlled by rate
@@ -410,6 +424,13 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  // If this is a new device, pair with it and remember its address.
+  bool isNewPeer = !esp_now_is_peer_exist(mac);
+  discovery.handleIncoming(mac, incomingData, len);
+  if (isNewPeer) {
+    memcpy(targetAddress, mac, 6);
+  }
+
   // Copy telemetry data from the incoming packet. The drone is expected to
   // send a telemetryPacket structure defined above.
   memcpy(&telemetry, incomingData, sizeof(telemetry));
@@ -467,6 +488,15 @@ void drawTelemetryInfo(){
   oled.setCursor(64,25); oled.print("R:");    oled.print(telemetry.roll);
   oled.setCursor(0,40);  oled.print("Y:");    oled.print(telemetry.yaw);
   oled.setCursor(64,40); oled.print("Acc:");  oled.print(telemetry.accelZ);
+  // Connection status icon in the top right
+  oled.setFont(iconFont);
+  oled.setCursor(112,10);
+  if(discovery.hasPeers()){
+    oled.print(checkIcon);
+  }else{
+    oled.print(alertIcon);
+  }
+  drawHomeFooter();
   oled.sendBuffer();
 }
 
@@ -489,6 +519,7 @@ void drawPidGraphs(){
   // Divider lines between graphs
   oled.drawLine(0,21,screen_Width,21);
   oled.drawLine(0,43,screen_Width,43);
+  drawHomeFooter();
   oled.sendBuffer();
 }
 
@@ -554,7 +585,56 @@ void drawOrientationCube(){
                       cx+3, head + (arrowLen>0?-5:5));
   }
 
+  drawHomeFooter();
   oled.sendBuffer();
+}
+
+// Simple pairing menu displaying discovered peers. A "Home" entry at the
+// bottom allows exiting back to the main menu.
+void drawPairingMenu(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+  oled.setCursor(0,10);
+  oled.print("Pairing");
+
+  int count = discovery.getPeerCount();
+  for(int i=0;i<count && i<4;i++){
+    const uint8_t *mac = discovery.getPeer(i);
+    oled.setCursor(0, 20 + i*12);
+    if(i==selectedPeer) oled.print(">"); else oled.print(" ");
+    char buf[18];
+    sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
+            mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+    oled.print(buf);
+  }
+
+  // Home option after the list of peers
+  oled.setCursor(0, 20 + count*12);
+  if(selectedPeer == count) oled.print(">"); else oled.print(" ");
+  oled.print("Home");
+
+  oled.sendBuffer();
+}
+
+// Main home screen that lets the user choose which page to open.
+void drawHomeMenu(){
+  oled.clearBuffer();
+  oled.setFont(textFont);
+  const char* items[] = {"Telemetry","PID Graphs","Orientation","Pairing"};
+  for(int i=0;i<4;i++){
+    oled.setCursor(0,10 + i*12);
+    if(i==homeMenuIndex) oled.print(">"); else oled.print(" ");
+    oled.print(items[i]);
+  }
+  oled.sendBuffer();
+}
+
+// Draw a "Home" option at the bottom of the screen. When homeSelected is
+// true, the option is highlighted with an arrow.
+void drawHomeFooter(){
+  oled.setCursor(0,60);
+  if(homeSelected) oled.print(">"); else oled.print(" ");
+  oled.print("Home");
 }
 
 
@@ -904,13 +984,15 @@ void setup() {
   while(1){oled.drawStr(0,15,"someting wong wit ya bot ID");  oled.sendBuffer();delay(5000);}
   }debug("peer added \n")
 
-  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated 
-  
+  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated
+
   oled.clear();
   oled.sendBuffer();
   oled.drawStr(0,32,"Found'e bot ;)");
   oled.sendBuffer();
   delay(1000);debug("Coms in place\n\n")
+  discovery.begin();
+  discovery.discover();
   //==================================
 
   //Interrupts setting ups ===========
@@ -1015,10 +1097,68 @@ void loop() {
     ledcWrite(0,0);
   }
 
-  // Change display mode when the encoder button is pressed.
+  // Automatic discovery while in the pairing menu.
+  if(displayMode == 4 && millis() - lastDiscoveryTime > 2000){
+    discovery.discover();
+    lastDiscoveryTime = millis();
+  }
+
+  // Handle encoder rotation depending on the current page.
+  if(displayMode == 0){
+    int delta = encoderCount - lastEncoderCount;
+    int menuCount = 4;
+    if(delta != 0){
+      homeMenuIndex = (homeMenuIndex + delta) % menuCount;
+      if(homeMenuIndex < 0) homeMenuIndex += menuCount;
+      lastEncoderCount = encoderCount;
+    }
+  } else if(displayMode == 4){
+    int delta = encoderCount - lastEncoderCount;
+    int count = discovery.getPeerCount() + 1; // include Home option
+    if(delta != 0 && count > 0){
+      selectedPeer = (selectedPeer + delta) % count;
+      if(selectedPeer < 0) selectedPeer += count;
+      lastEncoderCount = encoderCount;
+    }
+  } else {
+    int delta = encoderCount - lastEncoderCount;
+    if(delta != 0){
+      homeSelected = !homeSelected;
+      lastEncoderCount = encoderCount;
+    }
+  }
+
+  // Handle encoder button presses for navigation.
   if(encoderBtnState){
     encoderBtnState = 0;
-    displayMode = (displayMode + 1) % 3;
+    if(displayMode == 0){
+      switch(homeMenuIndex){
+        case 0: displayMode = 1; break;
+        case 1: displayMode = 2; break;
+        case 2: displayMode = 3; break;
+        case 3: displayMode = 4; selectedPeer = 0; break;
+      }
+      lastEncoderCount = encoderCount;
+      homeSelected = false;
+    } else if(displayMode == 4){
+      int count = discovery.getPeerCount();
+      if(selectedPeer == count){
+        displayMode = 0;
+        homeMenuIndex = 0;
+        homeSelected = false;
+        lastEncoderCount = encoderCount;
+      } else if(count > 0){
+        const uint8_t *mac = discovery.getPeer(selectedPeer);
+        memcpy(targetAddress, mac, 6);
+      }
+    } else {
+      if(homeSelected){
+        displayMode = 0;
+        homeMenuIndex = 0;
+        homeSelected = false;
+        lastEncoderCount = encoderCount;
+      }
+    }
     isbeeping = 1; // audible feedback
   }
 
@@ -1044,9 +1184,11 @@ void loop() {
 
   // Update OLED with the selected telemetry view
   switch(displayMode){
-    case 0: drawTelemetryInfo(); break;
-    case 1: drawPidGraphs(); break;
-    case 2: drawOrientationCube(); break;
+    case 0: drawHomeMenu(); break;
+    case 1: drawTelemetryInfo(); break;
+    case 2: drawPidGraphs(); break;
+    case 3: drawOrientationCube(); break;
+    case 4: drawPairingMenu(); break;
   }
 
   // Send packet via ESP-NOW
