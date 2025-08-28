@@ -6,6 +6,8 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "display.h"
 #include "input.h"
 #include "telemetry.h"
@@ -239,6 +241,19 @@ void processComsData(byte index)
 //   emission.x=constrain(emission.x,-99,99);
 // }
 
+void displayTask(void* pvParameters){
+  for(;;){
+    switch(displayMode){
+      case 0: drawHomeMenu(); break;
+      case 1: drawTelemetryInfo(); break;
+      case 2: drawPidGraph(); break;
+      case 3: drawOrientationCube(); break;
+      case 4: drawPairingMenu(); break;
+    }
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  }
+}
+
 void setup() {
 
   //Pin directions ===================
@@ -253,6 +268,7 @@ void setup() {
 
   //Init Display =====================
   initDisplay();
+  xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, &displayEngine, 1);
   //==================================
 
   //Init PWM drivers =================
@@ -434,6 +450,13 @@ void loop() {
       if(selectedPeer < 0) selectedPeer += count;
       lastEncoderCount = encoderCount;
     }
+  } else if(displayMode == 2){
+    int delta = encoderCount - lastEncoderCount;
+    if(delta != 0){
+      pidGraphIndex = (pidGraphIndex + delta) % 3;
+      if(pidGraphIndex < 0) pidGraphIndex += 3;
+      lastEncoderCount = encoderCount;
+    }
   } else {
     int delta = encoderCount - lastEncoderCount;
     if(delta != 0){
@@ -465,6 +488,10 @@ void loop() {
         const uint8_t *mac = discovery.getPeer(selectedPeer);
         memcpy(targetAddress, mac, 6);
       }
+    } else if(displayMode == 2){
+      displayMode = 0;
+      homeMenuIndex = 1;
+      lastEncoderCount = encoderCount;
     } else {
       if(homeSelected){
         displayMode = 0;
@@ -497,14 +524,7 @@ void loop() {
   emission.pitchAngle = map(analogRead(joystickB_Y),0,4096,-90,90);
   emission.arm_motors = btnmode;
 
-  // Update OLED with the selected telemetry view
-  switch(displayMode){
-    case 0: drawHomeMenu(); break;
-    case 1: drawTelemetryInfo(); break;
-    case 2: drawPidGraphs(); break;
-    case 3: drawOrientationCube(); break;
-    case 4: drawPairingMenu(); break;
-  }
+  // Display rendering handled in FreeRTOS display task
 
   // Send packet via ESP-NOW
   if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
