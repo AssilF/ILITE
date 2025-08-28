@@ -211,11 +211,16 @@ void drawTelemetryInfo(){
   oled.clearBuffer();
   drawHeader("Telemetry");
   oled.setFont(textFont);
-  oled.setCursor(0,22);  oled.print("Alt:");  oled.print(telemetry.altitude);
-  oled.setCursor(0,37);  oled.print("P:");    oled.print(telemetry.pitch);
-  oled.setCursor(64,37); oled.print("R:");    oled.print(telemetry.roll);
-  oled.setCursor(0,52);  oled.print("Y:");    oled.print(telemetry.yaw);
-  oled.setCursor(64,52); oled.print("Acc:");  oled.print(telemetry.accelZ);
+  int y = 22;
+  oled.setCursor(0, y);       oled.print("Alt: ");  oled.print(telemetry.altitude);
+  y += 10;
+  oled.setCursor(0, y);       oled.print("Pitch: "); oled.print(telemetry.pitch);
+  y += 10;
+  oled.setCursor(0, y);       oled.print("Roll: ");  oled.print(telemetry.roll);
+  y += 10;
+  oled.setCursor(0, y);       oled.print("Yaw: ");   oled.print(telemetry.yaw);
+  y += 10;
+  oled.setCursor(0, y);       oled.print("AccZ: ");  oled.print(telemetry.accelZ);
   oled.setFont(iconFont);
   oled.setCursor(112,22);
   if(discovery.hasPeers()){

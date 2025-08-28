@@ -113,14 +113,6 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   // send a telemetryPacket structure defined above.
   memcpy(&telemetry, incomingData, sizeof(telemetry));
 
-  // Update PID history buffers for the graphing screen. The oldest sample is
-  // discarded and the newest sample appended to the end of each buffer.
-  memmove(pidPitchHistory, pidPitchHistory + 1, (screen_Width - 1) * sizeof(int16_t));
-  memmove(pidRollHistory,  pidRollHistory  + 1, (screen_Width - 1) * sizeof(int16_t));
-  memmove(pidYawHistory,   pidYawHistory   + 1, (screen_Width - 1) * sizeof(int16_t));
-  pidPitchHistory[screen_Width - 1] = telemetry.pidPitch;
-  pidRollHistory[screen_Width - 1]  = telemetry.pidRoll;
-  pidYawHistory[screen_Width - 1]   = telemetry.pidYaw;
 }
 
  
@@ -247,7 +239,8 @@ void displayTask(void* pvParameters){
       case 3: drawOrientationCube(); break;
       case 4: drawPairingMenu(); break;
     }
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    appendPidSample();
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
