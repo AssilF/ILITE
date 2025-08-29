@@ -220,7 +220,7 @@ void drawTelemetryInfo(){
   y += 10;
   oled.setCursor(0, y);       oled.print("Yaw: ");   oled.print(telemetry.yaw);
   y += 10;
-  oled.setCursor(0, y);       oled.print("AccZ: ");  oled.print(telemetry.accelZ);
+  oled.setCursor(0, y);       oled.print("VAcc: ");  oled.print(telemetry.verticalAcc);
   oled.setFont(iconFont);
   oled.setCursor(112,22);
   if(discovery.hasPeers()){
@@ -293,7 +293,7 @@ void drawOrientationCube(){
     oled.drawLine(px[edges[i][0]], py[edges[i][0]],
                   px[edges[i][1]], py[edges[i][1]]);
   }
-  int arrowLen = map(telemetry.accelZ, -1000, 1000, -20, 20);
+  int arrowLen = map(static_cast<int>(telemetry.verticalAcc * 100), -1000, 1000, -20, 20);
   oled.drawLine(cx, cy, cx, cy - arrowLen);
   if(arrowLen != 0){
     int head = cy - arrowLen;

@@ -88,10 +88,10 @@ static bool receive_Status;
 
 
 
-// Accumulated altitude target and yaw command. Joystick deflection adjusts
-// these values incrementally so altitude and yaw are controlled by rate
+// Accumulated throttle and yaw command. Joystick deflection adjusts
+// these values incrementally so throttle and yaw are controlled by rate
 // rather than absolute joystick position.
-int16_t altitudeTarget = 0;
+uint16_t throttle = 1000;
 int16_t yawCommand     = 0;
 
 //Coms Fcns
@@ -110,7 +110,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   }
 
   // Copy telemetry data from the incoming packet. The drone is expected to
-  // send a telemetryPacket structure defined above.
+  // send a TelemetryPacket structure defined above.
   memcpy(&telemetry, incomingData, sizeof(telemetry));
 
 }
@@ -496,14 +496,13 @@ void loop() {
   }
 
   // Populate packet with desired control values
-  // Altitude is controlled incrementally: joystick deflection adjusts the
-  // accumulated altitude target rather than sending raw throttle. Releasing
-  // the joystick commands the craft to hold the new altitude.
-  int maxClimbRate = map(analogRead(potA), 0, 4095, 0, 200); // 0-50 cm per loop
-  int16_t altDelta = map(analogRead(joystickA_Y), 0, 4096, -maxClimbRate, maxClimbRate);
-  if (abs(altDelta) < 2) altDelta = 0; // small deadband to prevent drift
-  altitudeTarget = constrain(altitudeTarget + altDelta, 0, 2000);
-  emission.altitude = altitudeTarget;
+  // Throttle is controlled incrementally: joystick deflection adjusts the
+  // accumulated throttle value rather than sending absolute positions.
+  int maxClimbRate = map(analogRead(potA), 0, 4095, 0, 200);
+  int16_t throttleDelta = map(analogRead(joystickA_Y), 0, 4096, -maxClimbRate, maxClimbRate);
+  if (abs(throttleDelta) < 2) throttleDelta = 0; // small deadband to prevent drift
+  throttle = constrain(throttle + throttleDelta, 1000, 2000);
+  emission.throttle = throttle;
 
   // Yaw is controlled incrementally: joystick deflection adjusts the
   // accumulated yaw command rather than setting an absolute angle.
