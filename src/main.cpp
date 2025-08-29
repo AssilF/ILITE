@@ -302,15 +302,15 @@ void setup() {
   while(1){oled.drawStr(0,15,"ESPNOW FAILED :(");  oled.sendBuffer(); delay(5000);}
   }debug("\n\nespnow initialized\n")
 
-  esp_now_register_send_cb(OnDataSent); debug("sending callback set \n \n")//Sent Callback Function associated
-  memcpy(bot.peer_addr, targetAddress, 6); //putting the bot ID card into memory ;)
-  bot.channel = 0;     
-  bot.encrypt = false; //data won't be encrypted so we don't waste too much cpu juice
+  // esp_now_register_send_cb(OnDataSent); debug("sending callback set \n \n")//Sent Callback Function associated
+  // memcpy(bot.peer_addr, targetAddress, 6); //putting the bot ID card into memory ;)
+  // bot.channel = 0;     
+  // bot.encrypt = false; //data won't be encrypted so we don't waste too much cpu juice
 
-  if (esp_now_add_peer(&bot) != ESP_OK){
-  debug("What the bot doin ?");
-  while(1){oled.drawStr(0,15,"someting wong wit ya bot ID");  oled.sendBuffer();delay(5000);}
-  }debug("peer added \n")
+  // if (esp_now_add_peer(&bot) != ESP_OK){
+  // debug("What the bot doin ?");
+  // while(1){oled.drawStr(0,15,"someting wong wit ya bot ID");  oled.sendBuffer();delay(5000);}
+  // }debug("peer added \n")
 
   esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated
 
