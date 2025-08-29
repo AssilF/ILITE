@@ -97,13 +97,17 @@ int16_t yawCommand     = 0;
 //Coms Fcns
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
-  // Serial.print("\r\nLast Packet Send Status:\t");
-  // Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+  debug("Last Packet Send Status: ");
+  debug(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success\n" : "Delivery Fail\n");
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  debug("Data received: ");
+  debug(len);
+  debug(" bytes\n");
   // Let the discovery helper consume any handshake packets.
   if (discovery.handleIncoming(mac, incomingData, len)) {
+    debug("Discovery handshake\n");
     // Remember the sender as the current target once paired.
     memcpy(targetAddress, mac, 6);
     return;
@@ -430,7 +434,7 @@ void loop() {
   // Handle encoder rotation depending on the current page.
   if(displayMode == 0){
     int delta = encoderCount - lastEncoderCount;
-    int menuCount = 5;
+    int menuCount = 6;
     if(delta != 0){
       homeMenuIndex = (homeMenuIndex + delta) % menuCount;
       if(homeMenuIndex < 0) homeMenuIndex += menuCount;
@@ -471,11 +475,12 @@ void loop() {
       lastEncoderCount = encoderCount;
     } else if(displayMode == 0){
       switch(homeMenuIndex){
-        case 0: displayMode = 1; break;
-        case 1: displayMode = 2; break;
-        case 2: displayMode = 3; break;
-        case 3: displayMode = 4; selectedPeer = 0; break;
-        case 4: displayMode = 6; break;
+        case 0: displayMode = 5; break; // Dashboard
+        case 1: displayMode = 1; break; // Telemetry
+        case 2: displayMode = 2; break; // PID Graph
+        case 3: displayMode = 3; break; // Orientation
+        case 4: displayMode = 4; selectedPeer = 0; break; // Pairing
+        case 5: displayMode = 6; break; // About
       }
       lastEncoderCount = encoderCount;
       homeSelected = false;
@@ -492,7 +497,7 @@ void loop() {
       }
     } else if(displayMode == 2){
       displayMode = 0;
-      homeMenuIndex = 1;
+      homeMenuIndex = 2;
       lastEncoderCount = encoderCount;
     } else {
       if(homeSelected){
@@ -531,5 +536,9 @@ void loop() {
   if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
   {
     sent_Status=1;
-  }else{sent_Status=0;}
+    debug("Send ok\n");
+  }else{
+    sent_Status=0;
+    debug("Send failed\n");
+  }
 }

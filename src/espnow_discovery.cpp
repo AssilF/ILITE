@@ -31,6 +31,7 @@ void EspNowDiscovery::begin() {
 void EspNowDiscovery::discover() {
     IdentityMessage msg{};
     msg.type = SCAN_REQUEST;
+    Serial.println("Sending discovery request");
     esp_now_send(kBroadcastMac, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
 }
 
