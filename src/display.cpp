@@ -333,8 +333,8 @@ void drawHomeMenu(){
   oled.clearBuffer();
   drawHeader("Menu");
   oled.setFont(textFont);
-  const char* items[] = {"Telemetry","PID Graph","Orientation","Pairing","About"};
-  for(int i=0;i<5;i++){
+  const char* items[] = {"Dashboard","Telemetry","PID Graph","Orientation","Pairing","About"};
+  for(int i=0;i<6;i++){
     oled.setCursor(0,22 + i*10);
     if(i==homeMenuIndex) oled.print(">"); else oled.print(" ");
     oled.print(items[i]);
