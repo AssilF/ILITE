@@ -38,6 +38,7 @@ EspNowDiscovery discovery;
 xTaskHandle joystickPollTask = NULL;
 xTimerHandle encoderActionPollTimer = NULL;
 xTaskHandle displayEngine = NULL;
+xTaskHandle commsEngine = NULL;
 
 bool isbeeping=1;
 
@@ -250,6 +251,18 @@ void displayTask(void* pvParameters){
   }
 }
 
+void commTask(void* pvParameters){
+  const TickType_t delay = 20 / portTICK_PERIOD_MS; // 50Hz
+  for(;;){
+    if(esp_now_send(targetAddress, reinterpret_cast<uint8_t*>(&emission), sizeof(emission))==ESP_OK){
+      sent_Status = true;
+    }else{
+      sent_Status = false;
+    }
+    vTaskDelay(delay);
+  }
+}
+
 void setup() {
 
   //Pin directions ===================
@@ -327,6 +340,7 @@ void setup() {
   // Re-enable Soft AP in case discovery initialization resets WiFi.
   WiFi.softAP(ssid, password);
   discovery.discover();
+  xTaskCreatePinnedToCore(commTask, "comms", 4096, NULL, 3, &commsEngine, 0);
   //==================================
 
   //Interrupts handled in initInput()
@@ -531,12 +545,4 @@ void loop() {
   emission.arm_motors = btnmode;
 
   // Display rendering handled in FreeRTOS display task
-
-  // Send packet via ESP-NOW
-  if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
-  {
-    sent_Status=1;
-  }else{
-    sent_Status=0;
-  }
 }
