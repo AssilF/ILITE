@@ -102,11 +102,11 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  // If this is a new device, pair with it and remember its address.
-  bool isNewPeer = !esp_now_is_peer_exist(mac);
-  discovery.handleIncoming(mac, incomingData, len);
-  if (isNewPeer) {
+  // Let the discovery helper consume any handshake packets.
+  if (discovery.handleIncoming(mac, incomingData, len)) {
+    // Remember the sender as the current target once paired.
     memcpy(targetAddress, mac, 6);
+    return;
   }
 
   // Copy telemetry data from the incoming packet. The drone is expected to

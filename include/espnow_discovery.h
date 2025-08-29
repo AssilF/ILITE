@@ -14,9 +14,10 @@ public:
     void begin();
     // Broadcast a discovery message to any nearby devices.
     void discover();
-    // Examine an incoming packet and, if the sender isn't already paired,
-    // add it as a new peer.
-    void handleIncoming(const uint8_t *mac, const uint8_t *incomingData, int len);
+    // Examine an incoming packet and, if it is part of the discovery
+    // handshake, process it. Returns true if the packet was consumed by the
+    // discovery system and should not be treated as application data.
+    bool handleIncoming(const uint8_t *mac, const uint8_t *incomingData, int len);
     // Return true if at least one peer has been paired.
     bool hasPeers() const;
     // Retrieve the number of paired peers.
@@ -27,7 +28,8 @@ public:
 private:
     static constexpr int kMaxPeers = 5;
     uint8_t peerMacs[kMaxPeers][6] = {};
-    int peerCount = 0;
+    bool    peerAcked[kMaxPeers] = {};
+    int     peerCount = 0;
 };
 
 #endif // ESPNOW_DISCOVERY_H
