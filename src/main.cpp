@@ -536,9 +536,7 @@ void loop() {
   if(esp_now_send(targetAddress, (uint8_t *) &emission, sizeof(emission))==ESP_OK)
   {
     sent_Status=1;
-    debug("Send ok\n");
   }else{
     sent_Status=0;
-    debug("Send failed\n");
   }
 }

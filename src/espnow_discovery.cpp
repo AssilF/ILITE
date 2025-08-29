@@ -1,5 +1,6 @@
 #include "espnow_discovery.h"
 #include <cstring>
+#include <Arduino.h>
 
 // Broadcast MAC address used for discovery messages.
 static const uint8_t kBroadcastMac[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -71,8 +72,10 @@ bool EspNowDiscovery::handleIncoming(const uint8_t *mac, const uint8_t *incoming
         strncpy(resp.identity, kControllerId, sizeof(resp.identity));
         WiFi.macAddress(resp.mac);
         esp_now_send(mac, reinterpret_cast<uint8_t*>(&resp), sizeof(resp));
+        Serial.println("Sending Controller ID ");
         return true;
     } else if (msg->type == DRONE_ACK) {
+        Serial.println("Drone Acked");
         for (int i = 0; i < peerCount; ++i) {
             if (memcmp(peerMacs[i], mac, 6) == 0) {
                 peerAcked[i] = true;
