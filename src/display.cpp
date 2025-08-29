@@ -3,7 +3,7 @@
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 
-byte displayMode = 0;
+byte displayMode = 5;
 int homeMenuIndex = 0;
 bool homeSelected = false;
 int selectedPeer = 0;
@@ -23,6 +23,10 @@ unsigned long lastDiscoveryTime = 0;
 #define iconFont u8g2_font_open_iconic_all_2x_t
 #define networkBatteryIconFont u8g2_font_siji_t_6x10
 #define textFont u8g2_font_torussansbold8_8r
+#define smallFont u8g2_font_5x8_tf
+#define bootTitleFont u8g2_font_inb38_mr
+#define bootSubFont u8g2_font_6x13_tf
+#define smallIconFont u8g2_font_open_iconic_all_1x_t
 
 #define compassIcon "\u0087"
 #define speedIcon "\u010d"
@@ -98,6 +102,7 @@ int screen = 1;
 void initDisplay(){
   oled.begin();
   oled.setFont(textFont);
+  drawBootScreen();
 }
 
 void drawHeader(const char* title){
@@ -210,19 +215,19 @@ void drawDrongazInterface(){
 void drawTelemetryInfo(){
   oled.clearBuffer();
   drawHeader("Telemetry");
-  oled.setFont(textFont);
-  int y = 22;
+  oled.setFont(smallFont);
+  int y = 14;
   oled.setCursor(0, y);       oled.print("Alt: ");  oled.print(telemetry.altitude);
-  y += 10;
+  y += 8;
   oled.setCursor(0, y);       oled.print("Pitch: "); oled.print(telemetry.pitch);
-  y += 10;
+  y += 8;
   oled.setCursor(0, y);       oled.print("Roll: ");  oled.print(telemetry.roll);
-  y += 10;
+  y += 8;
   oled.setCursor(0, y);       oled.print("Yaw: ");   oled.print(telemetry.yaw);
-  y += 10;
+  y += 8;
   oled.setCursor(0, y);       oled.print("VAcc: ");  oled.print(telemetry.verticalAcc);
-  oled.setFont(iconFont);
-  oled.setCursor(112,22);
+  oled.setFont(smallIconFont);
+  oled.setCursor(112,14);
   if(discovery.hasPeers()){
     oled.print(checkIcon);
   }else{
@@ -328,9 +333,9 @@ void drawHomeMenu(){
   oled.clearBuffer();
   drawHeader("Menu");
   oled.setFont(textFont);
-  const char* items[] = {"Telemetry","PID Graph","Orientation","Pairing"};
-  for(int i=0;i<4;i++){
-    oled.setCursor(0,22 + i*12);
+  const char* items[] = {"Telemetry","PID Graph","Orientation","Pairing","About"};
+  for(int i=0;i<5;i++){
+    oled.setCursor(0,22 + i*10);
     if(i==homeMenuIndex) oled.print(">"); else oled.print(" ");
     oled.print(items[i]);
   }
@@ -341,6 +346,97 @@ void drawHomeFooter(){
   oled.setCursor(0,60);
   if(homeSelected) oled.print(">"); else oled.print(" ");
   oled.print("Home");
+}
+
+void drawDashboard(){
+  oled.clearBuffer();
+  if(!discovery.hasPeers()){
+    oled.setFont(smallFont);
+    uint8_t w = oled.getUTF8Width("Pair a device");
+    oled.setCursor((screen_Width - w)/2, screen_Height/2);
+    oled.print("Pair a device");
+    oled.sendBuffer();
+    return;
+  }
+
+  const float size = 15.0f;
+  const int cx = screen_Width/2;
+  const int cy = screen_Height/2 + 6;
+  struct Vec3 { float x,y,z; };
+  const Vec3 verts[8] = {
+    {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
+    {-size,-size, size}, { size,-size, size}, { size, size, size}, {-size, size, size}
+  };
+  int px[8];
+  int py[8];
+  float roll  = telemetry.roll  * DEG_TO_RAD;
+  float pitch = telemetry.pitch * DEG_TO_RAD;
+  float yaw   = telemetry.yaw   * DEG_TO_RAD;
+  for(int i=0;i<8;i++){
+    float x=verts[i].x;
+    float y=verts[i].y;
+    float z=verts[i].z;
+    float y1 = y*cos(roll) - z*sin(roll);
+    float z1 = y*sin(roll) + z*cos(roll);
+    y = y1; z = z1;
+    float x1 = x*cos(pitch) + z*sin(pitch);
+    float z2 = -x*sin(pitch) + z*cos(pitch);
+    x = x1; z = z2;
+    float x2 = x*cos(yaw) - y*sin(yaw);
+    float y2 = x*sin(yaw) + y*cos(yaw);
+    x = x2; y = y2;
+    px[i] = cx + (int)x;
+    py[i] = cy - (int)y;
+  }
+  const uint8_t edges[12][2] = {
+    {0,1},{1,2},{2,3},{3,0},
+    {4,5},{5,6},{6,7},{7,4},
+    {0,4},{1,5},{2,6},{3,7}
+  };
+  for(int i=0;i<12;i++){
+    oled.drawLine(px[edges[i][0]], py[edges[i][0]],
+                  px[edges[i][1]], py[edges[i][1]]);
+  }
+  int arrowLen = map(static_cast<int>(telemetry.verticalAcc * 100), -1000, 1000, -20, 20);
+  oled.drawLine(cx, cy, cx, cy - arrowLen);
+  if(arrowLen != 0){
+    int head = cy - arrowLen;
+    oled.drawTriangle(cx, head, cx-3, head + (arrowLen>0?-5:5),
+                      cx+3, head + (arrowLen>0?-5:5));
+  }
+  oled.setFont(smallFont);
+  oled.setCursor(0,8);  oled.print("Alt:"); oled.print(telemetry.altitude);
+  oled.setCursor(0,16); oled.print("Thr:"); oled.print(emission.throttle);
+  oled.setCursor(0,24); oled.print("P:");   oled.print(emission.pitchAngle);
+  oled.setCursor(0,32); oled.print("R:");   oled.print(emission.rollAngle);
+  oled.setCursor(0,40); oled.print("Y:");   oled.print(emission.yawAngle);
+  oled.sendBuffer();
+}
+
+void drawAbout(){
+  oled.clearBuffer();
+  drawHeader("About");
+  oled.setFont(smallFont);
+  oled.setCursor(0,24); oled.print("Devices:");
+  oled.setCursor(0,34); oled.print("Bulky");
+  oled.setCursor(0,44); oled.print("The'gill");
+  oled.setCursor(0,54); oled.print("\xB5Tomba");
+  drawHomeFooter();
+  oled.sendBuffer();
+}
+
+void drawBootScreen(){
+  oled.clearBuffer();
+  oled.setFont(bootTitleFont);
+  uint8_t w = oled.getUTF8Width("ASCE");
+  oled.setCursor((screen_Width - w)/2, 40);
+  oled.print("ASCE");
+  oled.setFont(bootSubFont);
+  w = oled.getUTF8Width("ILITE V2");
+  oled.setCursor((screen_Width - w)/2, 62);
+  oled.print("ILITE V2");
+  oled.sendBuffer();
+  delay(2000);
 }
 
 void irData (){
