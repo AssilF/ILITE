@@ -238,6 +238,8 @@ void displayTask(void* pvParameters){
       case 2: drawPidGraph(); break;
       case 3: drawOrientationCube(); break;
       case 4: drawPairingMenu(); break;
+      case 5: drawDashboard(); break;
+      case 6: drawAbout(); break;
     }
     appendPidSample();
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -428,7 +430,7 @@ void loop() {
   // Handle encoder rotation depending on the current page.
   if(displayMode == 0){
     int delta = encoderCount - lastEncoderCount;
-    int menuCount = 4;
+    int menuCount = 5;
     if(delta != 0){
       homeMenuIndex = (homeMenuIndex + delta) % menuCount;
       if(homeMenuIndex < 0) homeMenuIndex += menuCount;
@@ -449,6 +451,8 @@ void loop() {
       if(pidGraphIndex < 0) pidGraphIndex += 3;
       lastEncoderCount = encoderCount;
     }
+  } else if(displayMode == 5){
+    // no rotary action on dashboard
   } else {
     int delta = encoderCount - lastEncoderCount;
     if(delta != 0){
@@ -460,12 +464,18 @@ void loop() {
   // Handle encoder button presses for navigation.
   if(encoderBtnState){
     encoderBtnState = 0;
-    if(displayMode == 0){
+    if(displayMode == 5){
+      displayMode = 0;
+      homeMenuIndex = 0;
+      homeSelected = false;
+      lastEncoderCount = encoderCount;
+    } else if(displayMode == 0){
       switch(homeMenuIndex){
         case 0: displayMode = 1; break;
         case 1: displayMode = 2; break;
         case 2: displayMode = 3; break;
         case 3: displayMode = 4; selectedPeer = 0; break;
+        case 4: displayMode = 6; break;
       }
       lastEncoderCount = encoderCount;
       homeSelected = false;
