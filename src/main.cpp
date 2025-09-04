@@ -89,11 +89,10 @@ static bool receive_Status;
 
 
 
-// Accumulated throttle and yaw command. Joystick deflection adjusts
-// these values incrementally so throttle and yaw are controlled by rate
-// rather than absolute joystick position.
-uint16_t throttle = 1000;
-int16_t yawCommand     = 0;
+// Accumulated yaw command. Joystick deflection adjusts this value
+// incrementally so yaw is controlled by rate rather than absolute
+// joystick position.
+int16_t yawCommand = 0;
 
 //Coms Fcns
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
@@ -525,13 +524,8 @@ void loop() {
   }
 
   // Populate packet with desired control values
-  // Throttle is controlled incrementally: joystick deflection adjusts the
-  // accumulated throttle value rather than sending absolute positions.
-  int maxClimbRate = map(analogRead(potA), 0, 4095, 0, 200);
-  int16_t throttleDelta = map(analogRead(joystickA_Y), 0, 4096, -maxClimbRate, maxClimbRate);
-  if (abs(throttleDelta) < 2) throttleDelta = 0; // small deadband to prevent drift
-  throttle = constrain(throttle + throttleDelta, 1000, 2000);
-  emission.throttle = throttle;
+  // Throttle maps joystick position directly to RC range for Dronegaze.
+  emission.throttle = map(analogRead(joystickA_Y), 0, 4096, 1000, 2000);
 
   // Yaw is controlled incrementally: joystick deflection adjusts the
   // accumulated yaw command rather than setting an absolute angle.
