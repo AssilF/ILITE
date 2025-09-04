@@ -252,7 +252,7 @@ void displayTask(void* pvParameters){
 }
 
 void commTask(void* pvParameters){
-  const TickType_t delay = 20 / portTICK_PERIOD_MS; // 50Hz
+  const TickType_t delay = 10 / portTICK_PERIOD_MS; // 50Hz
   for(;;){
     if(esp_now_send(targetAddress, reinterpret_cast<uint8_t*>(&emission), sizeof(emission))==ESP_OK){
       sent_Status = true;
