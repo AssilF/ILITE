@@ -561,8 +561,15 @@ void loop() {
   }
 
   // Populate packet with desired control values
-  // Throttle maps joystick position directly to RC range for Dronegaze.
-  emission.throttle = map(analogRead(joystickA_Y), 0, 4096, 1000, 2000);
+  // The throttle joystick is spring-centered, so treat the center position
+  // as minimum throttle and map only the upper half of its travel to the
+  // full RC range. Values below the center are clamped to 1000 μs.
+  int rawThrottle = analogRead(joystickA_Y);
+  if (rawThrottle <= 2048) {
+    emission.throttle = 1000;
+  } else {
+    emission.throttle = map(rawThrottle, 2048, 4095, 1000, 2000);
+  }
 
   // Yaw is controlled incrementally: joystick deflection adjusts the
   // accumulated yaw command rather than setting an absolute angle.
