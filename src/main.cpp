@@ -107,6 +107,13 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   debug("Data received: ");
   debug(len);
   debug(" bytes\n");
+  // Ignore any frames from the universal broadcast address to prevent
+  // pairing with ourselves when our own discovery packets are received.
+  if (memcmp(mac, broadcastAddress, 6) == 0) {
+    debug("Ignoring broadcast frame\n");
+    return;
+  }
+
   // Let the discovery helper consume any handshake packets.
   if (discovery.handleIncoming(mac, incomingData, len)) {
     debug("Discovery handshake\n");

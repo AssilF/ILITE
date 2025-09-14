@@ -36,6 +36,19 @@ void EspNowDiscovery::discover() {
 }
 
 bool EspNowDiscovery::handleIncoming(const uint8_t *mac, const uint8_t *incomingData, int len) {
+    // Ignore any packets originating from the universal broadcast address
+    // or our own MAC address. The controller occasionally receives its own
+    // broadcast discovery frames and would otherwise attempt to treat them
+    // as peer telemetry or even pair with itself.
+    if (memcmp(mac, kBroadcastMac, 6) == 0) {
+        return false; // Ignore broadcast traffic
+    }
+    uint8_t selfMac[6];
+    WiFi.macAddress(selfMac);
+    if (memcmp(mac, selfMac, 6) == 0) {
+        return false; // Ignore packets we originated
+    }
+
     if (len != sizeof(IdentityMessage)) {
         return false; // Not a pairing message
     }
