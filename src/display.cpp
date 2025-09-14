@@ -1,5 +1,6 @@
 #include "display.h"
 #include <stdio.h>
+#include <string.h>
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 
@@ -9,6 +10,8 @@ bool homeSelected = false;
 int selectedPeer = 0;
 int lastEncoderCount = 0;
 unsigned long lastDiscoveryTime = 0;
+int infoPeer = 0;
+bool pairedIsBulky = false;
 
 #define displayWidth 128
 #define displayHeight 64
@@ -260,19 +263,21 @@ void drawPidGraph(){
 void drawOrientationCube(){
   oled.clearBuffer();
   drawHeader("Orientation");
-  const float size = 15.0f;
+  const float xSize = 20.0f;
+  const float ySize = 10.0f;
+  const float zSize = 5.0f;
   const int cx = screen_Width/2;
   const int cy = screen_Height/2 + 6;
   struct Vec3 { float x,y,z; };
   const Vec3 verts[8] = {
-    {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
-    {-size,-size, size}, { size,-size, size}, { size, size, size}, {-size, size, size}
+    {-xSize,-ySize,-zSize}, { xSize,-ySize,-zSize}, { xSize, ySize,-zSize}, {-xSize, ySize,-zSize},
+    {-xSize,-ySize, zSize}, { xSize,-ySize, zSize}, { xSize, ySize, zSize}, {-xSize, ySize, zSize}
   };
   int px[8];
   int py[8];
   float roll  = telemetry.roll  * DEG_TO_RAD;
-  float pitch = telemetry.pitch * DEG_TO_RAD;
-  float yaw   = telemetry.yaw   * DEG_TO_RAD;
+  float pitch = -telemetry.pitch * DEG_TO_RAD;
+  float yaw   = -telemetry.yaw   * DEG_TO_RAD + PI;
   for(int i=0;i<8;i++){
     float x=verts[i].x;
     float y=verts[i].y;
@@ -315,17 +320,39 @@ void drawPairingMenu(){
   oled.setFont(textFont);
   int count = discovery.getPeerCount();
   for(int i=0;i<count && i<4;i++){
-    const uint8_t *mac = discovery.getPeer(i);
+    const char* name = discovery.getPeerName(i);
     oled.setCursor(0, 22 + i*12);
     if(i==selectedPeer) oled.print(">"); else oled.print(" ");
-    char buf[18];
-    sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
-            mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-    oled.print(buf);
+    oled.print(name);
   }
   oled.setCursor(0, 22 + count*12);
   if(selectedPeer == count) oled.print(">"); else oled.print(" ");
   oled.print("Home");
+  oled.sendBuffer();
+}
+
+void drawPeerInfo(){
+  oled.clearBuffer();
+  drawHeader("Device Info");
+  oled.setFont(textFont);
+  const char* name = discovery.getPeerName(infoPeer);
+  const uint8_t* mac = discovery.getPeer(infoPeer);
+  oled.setCursor(0,22); oled.print("Device: "); oled.print(name);
+  char buf[18];
+  sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  oled.setCursor(0,34); oled.print("MAC: "); oled.print(buf);
+  if(strcmp(name, "Bulky") == 0){
+    oled.setCursor(0,46);
+    oled.print("Bulky detected");
+  }
+  oled.setCursor(0,60);
+  if(homeSelected){
+    oled.print(">Return");
+    oled.setCursor(60,60); oled.print("Pair");
+  }else{
+    oled.print(">Pair");
+    oled.setCursor(60,60); oled.print("Return");
+  }
   oled.sendBuffer();
 }
 
@@ -359,19 +386,21 @@ void drawDashboard(){
     return;
   }
 
-  const float size = 15.0f;
+  const float xSize = 20.0f;
+  const float ySize = 10.0f;
+  const float zSize = 5.0f;
   const int cx = screen_Width/2;
   const int cy = screen_Height/2 + 6;
   struct Vec3 { float x,y,z; };
   const Vec3 verts[8] = {
-    {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
-    {-size,-size, size}, { size,-size, size}, { size, size, size}, {-size, size, size}
+    {-xSize,-ySize,-zSize}, { xSize,-ySize,-zSize}, { xSize, ySize,-zSize}, {-xSize, ySize,-zSize},
+    {-xSize,-ySize, zSize}, { xSize,-ySize, zSize}, { xSize, ySize, zSize}, {-xSize, ySize, zSize}
   };
   int px[8];
   int py[8];
   float roll  = telemetry.roll  * DEG_TO_RAD;
-  float pitch = telemetry.pitch * DEG_TO_RAD;
-  float yaw   = telemetry.yaw   * DEG_TO_RAD;
+  float pitch = -telemetry.pitch * DEG_TO_RAD;
+  float yaw   = -telemetry.yaw   * DEG_TO_RAD + PI;
   for(int i=0;i<8;i++){
     float x=verts[i].x;
     float y=verts[i].y;
@@ -403,6 +432,11 @@ void drawDashboard(){
     int head = cy - arrowLen;
     oled.drawTriangle(cx, head, cx-3, head + (arrowLen>0?-5:5),
                       cx+3, head + (arrowLen>0?-5:5));
+  }
+  if(pairedIsBulky){
+    oled.setFont(smallFont);
+    oled.setCursor(90,8);
+    oled.print("Bulky");
   }
   oled.setFont(smallFont);
   oled.setCursor(0,8);  oled.print("Alt:"); oled.print(telemetry.altitude);
