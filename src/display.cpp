@@ -200,9 +200,9 @@ void drawDrongazInterface(){
   oled.setFont(textFont);
   oled.setCursor(0,10);
   oled.print("Alt:");
-  oled.print(emission.altitude);
+  oled.print(emission.throttle);
   oled.drawFrame(0,14,screen_Width,6);
-  oled.drawBox(0,14,map(emission.altitude,0,2000,0,screen_Width),6);
+  oled.drawBox(0,14,map(emission.throttle,0,2000,0,screen_Width),6);
   oled.setCursor(0,30);
   oled.print("P:");
   oled.print(emission.pitchAngle);
