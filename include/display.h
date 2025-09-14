@@ -16,6 +16,8 @@ extern bool homeSelected;
 extern int selectedPeer;
 extern int lastEncoderCount;
 extern unsigned long lastDiscoveryTime;
+extern int infoPeer;
+extern bool pairedIsBulky;
 
 extern byte batteryLevel;
 extern byte Front_Distance;
@@ -43,6 +45,7 @@ void drawTelemetryInfo();
 void drawPidGraph();
 void drawOrientationCube();
 void drawPairingMenu();
+void drawPeerInfo();
 void drawHomeMenu();
 void drawHomeFooter();
 void drawDashboard();

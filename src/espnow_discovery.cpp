@@ -55,12 +55,16 @@ bool EspNowDiscovery::handleIncoming(const uint8_t *mac, const uint8_t *incoming
                 for (int i = 0; i < peerCount; ++i) {
                     if (memcmp(peerMacs[i], mac, 6) == 0) {
                         known = true;
+                        strncpy(peerNames[i], msg->identity, sizeof(peerNames[i])-1);
+                        peerNames[i][sizeof(peerNames[i])-1] = '\0';
                         break;
                     }
                 }
                 if (!known && peerCount < kMaxPeers) {
                     memcpy(peerMacs[peerCount], mac, 6);
                     peerAcked[peerCount] = false;
+                    strncpy(peerNames[peerCount], msg->identity, sizeof(peerNames[peerCount])-1);
+                    peerNames[peerCount][sizeof(peerNames[peerCount])-1] = '\0';
                     peerCount++;
                 }
             }

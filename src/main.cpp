@@ -86,6 +86,8 @@ static esp_now_peer_info bot;
 
 static bool sent_Status;
 static bool receive_Status;
+unsigned long lastReceiveTime = 0;
+bool connected = false;
 
 
 
@@ -110,12 +112,16 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     debug("Discovery handshake\n");
     // Remember the sender as the current target once paired.
     memcpy(targetAddress, mac, 6);
+    lastReceiveTime = millis();
+    connected = true;
     return;
   }
 
   // Copy telemetry data from the incoming packet. The drone is expected to
   // send a TelemetryPacket structure defined above.
   memcpy(&telemetry, incomingData, sizeof(telemetry));
+  lastReceiveTime = millis();
+  connected = true;
 
 }
 
@@ -244,6 +250,7 @@ void displayTask(void* pvParameters){
       case 4: drawPairingMenu(); break;
       case 5: drawDashboard(); break;
       case 6: drawAbout(); break;
+      case 7: drawPeerInfo(); break;
     }
     appendPidSample();
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -413,6 +420,15 @@ void loop() {
   // displayMenu();
   processComsData(0);
 
+  if(connected && millis() - lastReceiveTime > 3000){
+    connected = false;
+    displayMode = 4;
+    selectedPeer = 0;
+    discovery.discover();
+    lastDiscoveryTime = millis();
+    pairedIsBulky = false;
+  }
+
   if(millis()-lastBtnModeMillis >= 200)
   {
     if(!ispressed){
@@ -505,9 +521,23 @@ void loop() {
         homeSelected = false;
         lastEncoderCount = encoderCount;
       } else if(count > 0){
-        const uint8_t *mac = discovery.getPeer(selectedPeer);
-        memcpy(targetAddress, mac, 6);
+        infoPeer = selectedPeer;
+        displayMode = 7;
+        homeSelected = false;
+        lastEncoderCount = encoderCount;
       }
+    } else if(displayMode == 7){
+      if(homeSelected){
+        displayMode = 4;
+        homeSelected = false;
+      }else{
+        const uint8_t *mac = discovery.getPeer(infoPeer);
+        memcpy(targetAddress, mac, 6);
+        pairedIsBulky = strcmp(discovery.getPeerName(infoPeer), "Bulky") == 0;
+        displayMode = 5;
+        homeSelected = false;
+      }
+      lastEncoderCount = encoderCount;
     } else if(displayMode == 2){
       displayMode = 0;
       homeMenuIndex = 2;
