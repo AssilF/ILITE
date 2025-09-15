@@ -564,12 +564,13 @@ void loop() {
   // The throttle joystick is spring-centered, so treat the center position
   // as minimum throttle and map only the upper half of its travel to the
   // full RC range. Values below the center are clamped to 1000 μs.
-  int rawThrottle = analogRead(joystickA_Y);
-  if (rawThrottle <= 2048) {
-    emission.throttle = 1000;
-  } else {
-    emission.throttle = map(rawThrottle, 2048, 4095, 1000, 2000);
-  }
+  emission.throttle = constrain(map(analogRead(joystickA_Y), 0,4095,2000,-1000)+map(analogRead(potA),0,4095,0,500),1000,2000);
+
+  // if (rawThrottle <= 2048) {
+  //   emission.throttle = 1000;
+  // } else {
+  //   emission.throttle = map(rawThrottle, 2048, 4095, 1000, 2000);
+  // }
 
   // Yaw is controlled incrementally: joystick deflection adjusts the
   // accumulated yaw command rather than setting an absolute angle.
