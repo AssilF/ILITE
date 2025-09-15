@@ -560,11 +560,17 @@ void loop() {
     isbeeping = 1; // audible feedback
   }
 
-  // Populate packet with desired control values
-  // The throttle joystick is spring-centered, so treat the center position
-  // as minimum throttle and map only the upper half of its travel to the
-  // full RC range. Values below the center are clamped to 1000 μs.
-  emission.throttle = constrain(map(analogRead(joystickA_Y), 0,4095,2000,-1000)+map(analogRead(potA),0,4095,0,500),1000,2000);
+  // Populate packet with desired control values.  Smooth the potentiometer
+  // used for throttle offset and map its full travel to 0–500 units.
+  static uint16_t potFiltered = analogRead(potA);
+  potFiltered = (potFiltered * 3 + analogRead(potA)) / 4; // IIR filter
+  uint16_t potOffset = map(potFiltered, 0, 4095, 0, 500);
+  potOffset = constrain(potOffset, 0, 500);
+
+  emission.throttle = constrain(
+      map(analogRead(joystickA_Y), 0, 4095, 2000, -1000) + potOffset,
+      1000,
+      2000);
 
   // if (rawThrottle <= 2048) {
   //   emission.throttle = 1000;
@@ -579,8 +585,13 @@ void loop() {
   yawCommand = constrain(yawCommand + yawDelta, -180, 180);
   emission.yawAngle = yawCommand;
 
-  emission.rollAngle  = map(analogRead(joystickB_X),0,4096,-90,90);
-  emission.pitchAngle = map(analogRead(joystickB_Y),0,4096,-90,90);
+  int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
+  if (abs(roll) < 10) roll = 0; // eliminate small deadzone around center
+  emission.rollAngle = roll;
+
+  int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
+  if (abs(pitch) < 10) pitch = 0;
+  emission.pitchAngle = pitch;
   emission.arm_motors = btnmode;
 
   // Display rendering handled in FreeRTOS display task
