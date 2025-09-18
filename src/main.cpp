@@ -564,8 +564,8 @@ void loop() {
   // used for throttle offset and map its full travel to 0–500 units.
   static uint16_t potFiltered = analogRead(potA);
   potFiltered = (potFiltered * 3 + analogRead(potA)) / 4; // IIR filter
-  uint16_t potOffset = map(potFiltered, 0, 4095, 0, 500);
-  potOffset = constrain(potOffset, 0, 500);
+  uint16_t potOffset = map(potFiltered, 0, 4095, 0, 800);
+  potOffset = constrain(potOffset, 0, 800);
 
   emission.throttle = constrain(
       map(analogRead(joystickA_Y), 0, 4095, 2000, -1000) + potOffset,
@@ -586,11 +586,11 @@ void loop() {
   emission.yawAngle = yawCommand;
 
   int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
-  if (abs(roll) < 10) roll = 0; // eliminate small deadzone around center
+  if (abs(roll) < 12) roll = 0; // eliminate small deadzone around center
   emission.rollAngle = roll;
 
   int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
-  if (abs(pitch) < 10) pitch = 0;
+  if (abs(pitch) < 12) pitch = 0;
   emission.pitchAngle = pitch;
   emission.arm_motors = btnmode;
 
