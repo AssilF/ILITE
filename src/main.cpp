@@ -46,6 +46,8 @@ bool isbeeping=1;
 
 bool botmode=0;
 bool lastbtn;
+bool btnmode = false;
+unsigned long beepMillis = 0;
 
 
 
@@ -600,9 +602,8 @@ void setup() {
 
 }
 
-unsigned long beepMillis;
 void beep()
-{ 
+{
   if(isbeeping==1){
   buzzer.enable();
   buzzer.outputCW(400);
@@ -617,7 +618,6 @@ void beep()
 }
 
 unsigned long lastBtnModeMillis;
-bool btnmode=0;
 bool ispressed;
 
 void loop() {

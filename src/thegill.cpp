@@ -4,9 +4,9 @@
 ThegillCommand thegillCommand{
   THEGILL_PACKET_MAGIC,
   0, 0, 0, 0,
+  4.0f,
   GillMode::Default,
   GillEasing::EaseInOut,
-  4.0f,
   0,
   0
 };
