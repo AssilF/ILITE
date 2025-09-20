@@ -197,6 +197,16 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     connected = true;
     return;
   }
+  if(pairedIsBulky){
+    size_t copySize = static_cast<size_t>(len);
+    if(copySize > sizeof(reception)){
+      copySize = sizeof(reception);
+    }
+    memcpy(&reception, incomingData, copySize);
+    lastReceiveTime = millis();
+    connected = true;
+    return;
+  }
   memcpy(&telemetry, incomingData, sizeof(telemetry));
   lastReceiveTime = millis();
   connected = true;
@@ -207,13 +217,14 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
 
 
-byte botSpeed;
+int8_t botSpeed;
 
 void processSpeed(int a)
 {
   //if(a<8){botMotionState=STOP;botSpeed=0;}
   //else{
-    botSpeed=map(a,0,4096,-100,100);
+    int mapped = map(a,0,4096,-100,100);
+    botSpeed = static_cast<int8_t>(constrain(mapped, -100, 100));
   //}
 }
 
@@ -265,6 +276,7 @@ void processComsData(byte index)
 
 static void updateDroneControl();
 static void updateThegillControl();
+static void updateBulkyControl();
 
 static void updateDroneControl(){
   static uint16_t potFiltered = analogRead(potA);
@@ -394,6 +406,16 @@ static void updateThegillControl(){
   lastHonk = honkPressed;
 }
 
+static void updateBulkyControl(){
+  processJoyStickA(analogRead(joystickA_Y), analogRead(joystickA_X));
+  bulkyCommand.replyIndex = 0;
+  bulkyCommand.motionState = botMotionState;
+  bulkyCommand.speed = botSpeed;
+  bulkyCommand.buttonStates[0] = digitalRead(button1) == LOW ? 1 : 0;
+  bulkyCommand.buttonStates[1] = digitalRead(button2) == LOW ? 1 : 0;
+  bulkyCommand.buttonStates[2] = digitalRead(button3) == LOW ? 1 : 0;
+}
+
 // void packData(byte index)
 // {
 //   switch (index)
@@ -474,6 +496,9 @@ void commTask(void* pvParameters){
     if(pairedIsThegill){
       payload = reinterpret_cast<const uint8_t*>(&thegillCommand);
       payloadSize = sizeof(thegillCommand);
+    } else if(pairedIsBulky){
+      payload = reinterpret_cast<const uint8_t*>(&bulkyCommand);
+      payloadSize = sizeof(bulkyCommand);
     } else {
       payload = reinterpret_cast<const uint8_t*>(&emission);
       payloadSize = sizeof(emission);
@@ -628,15 +653,11 @@ void loop() {
   beep();
 
   //Send Data Through the Air
-  
-  processJoyStickA(analogRead(joystickA_Y),analogRead(joystickA_X));
-  // debug("\n speed: ");debug(botSpeed)
-  // debug("\n bot motionstate: ")debug(String(botMotionState,BIN))
-  // debug("\n joystickX : ")debug(analogRead(joystickA_X))
-  // debug("\n joystickY : ")debug(analogRead(joystickA_Y))
-  // delay(500);
-  // displayMenu();
-  processComsData(0);
+
+  if(pairedIsBulky){
+    updateBulkyControl();
+    processComsData(0);
+  }
 
   if(connected && millis() - lastReceiveTime > 3000){
     connected = false;
@@ -646,6 +667,9 @@ void loop() {
     lastDiscoveryTime = millis();
     pairedIsBulky = false;
     pairedIsThegill = false;
+    botMotionState = STOP;
+    botSpeed = 0;
+    bulkyCommand = BulkyCommand{0, 0, 0, {0, 0, 0}};
     resetThegillState();
   }
 
@@ -777,6 +801,13 @@ void loop() {
         const char* peerName = discovery.getPeerName(infoPeer);
         pairedIsBulky = strcmp(peerName, "Bulky") == 0;
         pairedIsThegill = isNameThegill(peerName);
+        if(pairedIsBulky){
+          botMotionState = STOP;
+          botSpeed = 0;
+          bulkyCommand = BulkyCommand{0, 0, STOP, {0, 0, 0}};
+        } else {
+          bulkyCommand = BulkyCommand{0, 0, 0, {0, 0, 0}};
+        }
         if(pairedIsThegill){
           resetThegillState();
           gillConfigIndex = 0;
@@ -800,43 +831,45 @@ void loop() {
     isbeeping = 1; // audible feedback
   }
 
-  // Populate packet with desired control values.  Smooth the potentiometer
-  // used for throttle offset and map its full travel to 0–500 units.
-  static uint16_t potFiltered = analogRead(potA);
-  potFiltered = (potFiltered * 3 + analogRead(potA)) / 4; // IIR filter
-  uint16_t potOffset = map(potFiltered, 0, 4095, 0, 800);
-  potOffset = constrain(potOffset, 0, 800);
+  if(!pairedIsBulky){
+    // Populate packet with desired control values.  Smooth the potentiometer
+    // used for throttle offset and map its full travel to 0–500 units.
+    static uint16_t potFiltered = analogRead(potA);
+    potFiltered = (potFiltered * 3 + analogRead(potA)) / 4; // IIR filter
+    uint16_t potOffset = map(potFiltered, 0, 4095, 0, 800);
+    potOffset = constrain(potOffset, 0, 800);
 
-  emission.throttle = constrain(
-      map(analogRead(joystickA_Y), 0, 4095, 2000, -1000) + potOffset,
-      1000,
-      2000);
+    emission.throttle = constrain(
+        map(analogRead(joystickA_Y), 0, 4095, 2000, -1000) + potOffset,
+        1000,
+        2000);
 
-  // if (rawThrottle <= 2048) {
-  //   emission.throttle = 1000;
-  // } else {
-  //   emission.throttle = map(rawThrottle, 2048, 4095, 1000, 2000);
-  // }
+    // if (rawThrottle <= 2048) {
+    //   emission.throttle = 1000;
+    // } else {
+    //   emission.throttle = map(rawThrottle, 2048, 4095, 1000, 2000);
+    // }
 
-  // Yaw is controlled incrementally: joystick deflection adjusts the
-  // accumulated yaw command rather than setting an absolute angle.
-  int16_t yawDelta = map(analogRead(joystickA_X),0,4096,-10,10);
-  if (abs(yawDelta) < 2) yawDelta = 0; // small deadband to prevent drift
-  yawCommand = constrain(yawCommand + yawDelta, -180, 180);
-  emission.yawAngle = yawCommand;
+    // Yaw is controlled incrementally: joystick deflection adjusts the
+    // accumulated yaw command rather than setting an absolute angle.
+    int16_t yawDelta = map(analogRead(joystickA_X),0,4096,-10,10);
+    if (abs(yawDelta) < 2) yawDelta = 0; // small deadband to prevent drift
+    yawCommand = constrain(yawCommand + yawDelta, -180, 180);
+    emission.yawAngle = yawCommand;
 
-  int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
-  if (abs(roll) < 12) roll = 0; // eliminate small deadzone around center
-  emission.rollAngle = roll;
+    int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
+    if (abs(roll) < 12) roll = 0; // eliminate small deadzone around center
+    emission.rollAngle = roll;
 
-  int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
-  if (abs(pitch) < 12) pitch = 0;
-  emission.pitchAngle = pitch;
-  emission.arm_motors = btnmode;
-  if(pairedIsThegill){
-    updateThegillControl();
-  } else {
-    updateDroneControl();
+    int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
+    if (abs(pitch) < 12) pitch = 0;
+    emission.pitchAngle = pitch;
+    emission.arm_motors = btnmode;
+    if(pairedIsThegill){
+      updateThegillControl();
+    } else {
+      updateDroneControl();
+    }
   }
 
   // Display rendering handled in FreeRTOS display task

@@ -486,9 +486,25 @@ void drawThegillConfig(){
   oled.sendBuffer();
 }
 
+static void drawBulkyDashboard(){
+  oled.clearBuffer();
+  drawFirePosition();
+  drawLine();
+  drawMotionJoystickPose();
+  drawPeripheralJoystickPose();
+  drawProximity();
+  drawSpeed();
+  oled.sendBuffer();
+}
+
 void drawDashboard(){
   if(pairedIsThegill){
     drawThegillDashboard();
+    return;
+  }
+
+  if(pairedIsBulky){
+    drawBulkyDashboard();
     return;
   }
 
