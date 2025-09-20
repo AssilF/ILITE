@@ -114,6 +114,28 @@ static bool isNameThegill(const char* name){
   return false;
 }
 
+static bool isNameBulky(const char* name){
+  if(name == nullptr) return false;
+  const char target[] = {'b','u','l','k','y'};
+  size_t len = strlen(name);
+  if(len < sizeof(target)){
+    return false;
+  }
+  for(size_t i = 0; i + sizeof(target) - 1 < len; ++i){
+    bool match = true;
+    for(size_t j = 0; j < sizeof(target); ++j){
+      if(tolower(static_cast<unsigned char>(name[i + j])) != target[j]){
+        match = false;
+        break;
+      }
+    }
+    if(match){
+      return true;
+    }
+  }
+  return false;
+}
+
 static void resetThegillState(){
   thegillRuntime.targetLeftFront = 0.f;
   thegillRuntime.targetLeftRear = 0.f;
@@ -187,6 +209,26 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     memcpy(targetAddress, mac, 6);
     lastReceiveTime = millis();
     connected = true;
+    int peerIndex = discovery.findPeerIndex(mac);
+    if(peerIndex >= 0){
+      const char* peerName = discovery.getPeerName(peerIndex);
+      bool isBulkyPeer = isNameBulky(peerName);
+      bool isGillPeer = isNameThegill(peerName);
+      if(isBulkyPeer){
+        pairedIsBulky = true;
+        pairedIsThegill = false;
+        botMotionState = STOP;
+        botSpeed = 0;
+        bulkyCommand = BulkyCommand{0, 0, STOP, {0, 0, 0}};
+      } else if(isGillPeer){
+        pairedIsThegill = true;
+        pairedIsBulky = false;
+        resetThegillState();
+      } else {
+        pairedIsBulky = false;
+        pairedIsThegill = false;
+      }
+    }
     return;
   }
 
