@@ -37,6 +37,19 @@ void EspNowDiscovery::discover() {
 }
 
 bool EspNowDiscovery::handleIncoming(const uint8_t *mac, const uint8_t *incomingData, int len) {
+    // Ignore any packets originating from the universal broadcast address
+    // or our own MAC address. The controller occasionally receives its own
+    // broadcast discovery frames and would otherwise attempt to treat them
+    // as peer telemetry or even pair with itself.
+    if (memcmp(mac, kBroadcastMac, 6) == 0) {
+        return false; // Ignore broadcast traffic
+    }
+    uint8_t selfMac[6];
+    WiFi.macAddress(selfMac);
+    if (memcmp(mac, selfMac, 6) == 0) {
+        return false; // Ignore packets we originated
+    }
+
     if (len != sizeof(IdentityMessage)) {
         return false; // Not a pairing message
     }
@@ -56,12 +69,16 @@ bool EspNowDiscovery::handleIncoming(const uint8_t *mac, const uint8_t *incoming
                 for (int i = 0; i < peerCount; ++i) {
                     if (memcmp(peerMacs[i], mac, 6) == 0) {
                         known = true;
+                        strncpy(peerNames[i], msg->identity, sizeof(peerNames[i])-1);
+                        peerNames[i][sizeof(peerNames[i])-1] = '\0';
                         break;
                     }
                 }
                 if (!known && peerCount < kMaxPeers) {
                     memcpy(peerMacs[peerCount], mac, 6);
                     peerAcked[peerCount] = false;
+                    strncpy(peerNames[peerCount], msg->identity, sizeof(peerNames[peerCount])-1);
+                    peerNames[peerCount][sizeof(peerNames[peerCount])-1] = '\0';
                     peerCount++;
                 }
             }

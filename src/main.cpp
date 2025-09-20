@@ -4,6 +4,7 @@
 #include <ArduinoOTA.h>
 #include <DacESP32.h>
 #include <math.h>
+#include <ctype.h>
 #include <string.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
@@ -11,6 +12,7 @@
 #include "display.h"
 #include "input.h"
 #include "telemetry.h"
+#include "thegill.h"
 
 //debug interface
 #define verboseEn 1
@@ -44,6 +46,8 @@ bool isbeeping=1;
 
 bool botmode=0;
 bool lastbtn;
+bool btnmode = false;
+unsigned long beepMillis = 0;
 
 
 
@@ -86,6 +90,8 @@ static esp_now_peer_info bot;
 
 static bool sent_Status;
 static bool receive_Status;
+unsigned long lastReceiveTime = 0;
+bool connected = false;
 
 
 
@@ -93,6 +99,68 @@ static bool receive_Status;
 // incrementally so yaw is controlled by rate rather than absolute
 // joystick position.
 int16_t yawCommand = 0;
+
+static bool isNameThegill(const char* name){
+  if(name == nullptr) return false;
+  size_t len = strlen(name);
+  for(size_t i = 0; i + 3 < len; ++i){
+    if(tolower(static_cast<unsigned char>(name[i])) == 'g' &&
+       tolower(static_cast<unsigned char>(name[i+1])) == 'i' &&
+       tolower(static_cast<unsigned char>(name[i+2])) == 'l' &&
+       tolower(static_cast<unsigned char>(name[i+3])) == 'l'){
+      return true;
+    }
+  }
+  return false;
+}
+
+static void resetThegillState(){
+  thegillRuntime.targetLeftFront = 0.f;
+  thegillRuntime.targetLeftRear = 0.f;
+  thegillRuntime.targetRightFront = 0.f;
+  thegillRuntime.targetRightRear = 0.f;
+  thegillRuntime.actualLeftFront = 0.f;
+  thegillRuntime.actualLeftRear = 0.f;
+  thegillRuntime.actualRightFront = 0.f;
+  thegillRuntime.actualRightRear = 0.f;
+  thegillRuntime.easingRate = 4.0f;
+  thegillRuntime.brakeActive = false;
+  thegillRuntime.honkActive = false;
+  thegillCommand.magic = THEGILL_PACKET_MAGIC;
+  thegillCommand.leftFront = 0;
+  thegillCommand.leftRear = 0;
+  thegillCommand.rightFront = 0;
+  thegillCommand.rightRear = 0;
+  thegillCommand.flags = 0;
+  thegillCommand.reserved = 0;
+  thegillCommand.mode = thegillConfig.mode;
+  thegillCommand.easing = thegillConfig.easing;
+  thegillCommand.easingRate = 4.0f;
+}
+
+static float readJoystickAxis(uint8_t pin, size_t index){
+  static int center[4] = {2048, 2048, 2048, 2048};
+  static bool initialised[4] = {false, false, false, false};
+  if(index >= 4) return 0.f;
+  int raw = analogRead(pin);
+  if(!initialised[index]){
+    center[index] = raw;
+    initialised[index] = true;
+  }
+  int delta = raw - center[index];
+  const int deadzone = 80;
+  if(abs(delta) <= deadzone){
+    center[index] = (center[index] * 15 + raw) / 16;
+    return 0.f;
+  }
+  if(abs(delta) < deadzone * 3){
+    center[index] = (center[index] * 31 + raw) / 32;
+  }
+  float range = delta > 0 ? (4095 - center[index]) : center[index];
+  if(range < 1.f) range = 1.f;
+  float value = delta / range;
+  return constrain(value, -1.f, 1.f);
+}
 
 //Coms Fcns
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
@@ -105,17 +173,33 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   debug("Data received: ");
   debug(len);
   debug(" bytes\n");
+  // Ignore any frames from the universal broadcast address to prevent
+  // pairing with ourselves when our own discovery packets are received.
+  if (memcmp(mac, broadcastAddress, 6) == 0) {
+    debug("Ignoring broadcast frame\n");
+    return;
+  }
+
   // Let the discovery helper consume any handshake packets.
   if (discovery.handleIncoming(mac, incomingData, len)) {
     debug("Discovery handshake\n");
     // Remember the sender as the current target once paired.
     memcpy(targetAddress, mac, 6);
+    lastReceiveTime = millis();
+    connected = true;
     return;
   }
 
   // Copy telemetry data from the incoming packet. The drone is expected to
   // send a TelemetryPacket structure defined above.
+  if(pairedIsThegill){
+    lastReceiveTime = millis();
+    connected = true;
+    return;
+  }
   memcpy(&telemetry, incomingData, sizeof(telemetry));
+  lastReceiveTime = millis();
+  connected = true;
 
 }
 
@@ -177,6 +261,137 @@ void processComsData(byte index)
   default:
   break;
   }
+}
+
+static void updateDroneControl();
+static void updateThegillControl();
+
+static void updateDroneControl(){
+  static uint16_t potFiltered = analogRead(potA);
+  potFiltered = (potFiltered * 3 + analogRead(potA)) / 4; // IIR filter
+  uint16_t potOffset = map(potFiltered, 0, 4095, 0, 500);
+  potOffset = constrain(potOffset, 0, 500);
+
+  emission.throttle = constrain(
+      map(analogRead(joystickA_Y), 0, 4095, 2000, -1000) + potOffset,
+      1000,
+      2000);
+
+  int16_t yawDelta = map(analogRead(joystickA_X),0,4096,-10,10);
+  if (abs(yawDelta) < 2) yawDelta = 0; // small deadband to prevent drift
+  yawCommand = constrain(yawCommand + yawDelta, -180, 180);
+  emission.yawAngle = yawCommand;
+
+  int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
+  if (abs(roll) < 10) roll = 0; // eliminate small deadzone around center
+  emission.rollAngle = roll;
+
+  int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
+  if (abs(pitch) < 10) pitch = 0;
+  emission.pitchAngle = pitch;
+  emission.arm_motors = btnmode;
+}
+
+static void updateThegillControl(){
+  static uint32_t lastUpdate = millis();
+  uint32_t now = millis();
+  float dt = (now - lastUpdate) / 1000.0f;
+  if(dt <= 0.f || dt > 0.25f){
+    dt = 0.02f;
+  }
+  lastUpdate = now;
+
+  bool brakePressed = digitalRead(joystickBtnA) == LOW;
+  bool honkPressed = digitalRead(joystickBtnB) == LOW;
+  thegillRuntime.brakeActive = brakePressed;
+  thegillRuntime.honkActive = honkPressed;
+
+  static uint16_t potFiltered = analogRead(potA);
+  potFiltered = (potFiltered * 7 + analogRead(potA)) / 8;
+  float potNorm = constrain(static_cast<float>(potFiltered) / 4095.0f, 0.f, 1.f);
+
+  float leftTarget = 0.f;
+  float rightTarget = 0.f;
+  float easingRate = 4.0f;
+
+  if(thegillConfig.mode == GillMode::Default){
+    float x = readJoystickAxis(joystickA_X, 0);
+    float y = readJoystickAxis(joystickA_Y, 1);
+    float speedScale = potNorm;
+    leftTarget = constrain(y + x, -1.f, 1.f) * speedScale;
+    rightTarget = constrain(y - x, -1.f, 1.f) * speedScale;
+    easingRate = 6.0f;
+  } else {
+    float leftY = readJoystickAxis(joystickA_Y, 1);
+    float rightY = readJoystickAxis(joystickB_Y, 3);
+    leftTarget = constrain(leftY, -1.f, 1.f);
+    rightTarget = constrain(rightY, -1.f, 1.f);
+    const float minRate = 1.5f;
+    const float maxRate = 10.0f;
+    easingRate = minRate + (maxRate - minRate) * potNorm;
+  }
+
+  if(brakePressed){
+    leftTarget = 0.f;
+    rightTarget = 0.f;
+    if(easingRate < 12.0f){
+      easingRate = 12.0f;
+    }
+  }
+
+  thegillRuntime.targetLeftFront = leftTarget;
+  thegillRuntime.targetLeftRear = leftTarget;
+  thegillRuntime.targetRightFront = rightTarget;
+  thegillRuntime.targetRightRear = rightTarget;
+
+  auto smooth = [&](float current, float target){
+    if(fabsf(target - current) < 0.0005f){
+      return target;
+    }
+    float step = constrain(easingRate * dt, 0.f, 1.f);
+    float eased = applyEasingCurve(thegillConfig.easing, step);
+    if(step >= 1.f){
+      return target;
+    }
+    return current + (target - current) * eased;
+  };
+
+  thegillRuntime.actualLeftFront = smooth(thegillRuntime.actualLeftFront, leftTarget);
+  thegillRuntime.actualLeftRear = smooth(thegillRuntime.actualLeftRear, leftTarget);
+  thegillRuntime.actualRightFront = smooth(thegillRuntime.actualRightFront, rightTarget);
+  thegillRuntime.actualRightRear = smooth(thegillRuntime.actualRightRear, rightTarget);
+
+  if(brakePressed){
+    if(fabsf(thegillRuntime.actualLeftFront) < 0.01f) thegillRuntime.actualLeftFront = 0.f;
+    if(fabsf(thegillRuntime.actualLeftRear) < 0.01f) thegillRuntime.actualLeftRear = 0.f;
+    if(fabsf(thegillRuntime.actualRightFront) < 0.01f) thegillRuntime.actualRightFront = 0.f;
+    if(fabsf(thegillRuntime.actualRightRear) < 0.01f) thegillRuntime.actualRightRear = 0.f;
+  }
+
+  thegillRuntime.easingRate = easingRate;
+
+  constexpr float scale = 1000.0f;
+  thegillCommand.magic = THEGILL_PACKET_MAGIC;
+  thegillCommand.mode = thegillConfig.mode;
+  thegillCommand.easing = thegillConfig.easing;
+  thegillCommand.easingRate = easingRate;
+  thegillCommand.leftFront = static_cast<int16_t>(roundf(constrain(thegillRuntime.actualLeftFront, -1.f, 1.f) * scale));
+  thegillCommand.leftRear = static_cast<int16_t>(roundf(constrain(thegillRuntime.actualLeftRear, -1.f, 1.f) * scale));
+  thegillCommand.rightFront = static_cast<int16_t>(roundf(constrain(thegillRuntime.actualRightFront, -1.f, 1.f) * scale));
+  thegillCommand.rightRear = static_cast<int16_t>(roundf(constrain(thegillRuntime.actualRightRear, -1.f, 1.f) * scale));
+
+  uint8_t flags = 0;
+  if(brakePressed) flags |= GILL_FLAG_BRAKE;
+  if(honkPressed) flags |= GILL_FLAG_HONK;
+  thegillCommand.flags = flags;
+  thegillCommand.reserved = 0;
+
+  static bool lastHonk = false;
+  if(honkPressed && !lastHonk){
+    isbeeping = 1;
+    beepMillis = now;
+  }
+  lastHonk = honkPressed;
 }
 
 // void packData(byte index)
@@ -244,6 +459,7 @@ void displayTask(void* pvParameters){
       case 4: drawPairingMenu(); break;
       case 5: drawDashboard(); break;
       case 6: drawAbout(); break;
+      case 7: drawPeerInfo(); break;
     }
     appendPidSample();
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -253,7 +469,16 @@ void displayTask(void* pvParameters){
 void commTask(void* pvParameters){
   const TickType_t delay = 10 / portTICK_PERIOD_MS; // 50Hz
   for(;;){
-    if(esp_now_send(targetAddress, reinterpret_cast<uint8_t*>(&emission), sizeof(emission))==ESP_OK){
+    const uint8_t* payload;
+    size_t payloadSize;
+    if(pairedIsThegill){
+      payload = reinterpret_cast<const uint8_t*>(&thegillCommand);
+      payloadSize = sizeof(thegillCommand);
+    } else {
+      payload = reinterpret_cast<const uint8_t*>(&emission);
+      payloadSize = sizeof(emission);
+    }
+    if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
       sent_Status = true;
     }else{
       sent_Status = false;
@@ -318,7 +543,9 @@ void setup() {
   while(1){oled.drawStr(0,15,"ESPNOW FAILED :(");  oled.sendBuffer(); delay(5000);}
   }debug("\n\nespnow initialized\n")
 
-  // esp_now_register_send_cb(OnDataSent); debug("sending callback set \n \n")//Sent Callback Function associated
+
+  esp_now_register_send_cb(OnDataSent); debug("sending callback set \n \n")//Sent Callback Function associated
+
   // memcpy(bot.peer_addr, targetAddress, 6); //putting the bot ID card into memory ;)
   // bot.channel = 0;     
   // bot.encrypt = false; //data won't be encrypted so we don't waste too much cpu juice
@@ -377,9 +604,8 @@ void setup() {
 
 }
 
-unsigned long beepMillis;
 void beep()
-{ 
+{
   if(isbeeping==1){
   buzzer.enable();
   buzzer.outputCW(400);
@@ -394,7 +620,6 @@ void beep()
 }
 
 unsigned long lastBtnModeMillis;
-bool btnmode=0;
 bool ispressed;
 
 void loop() {
@@ -413,7 +638,18 @@ void loop() {
   // displayMenu();
   processComsData(0);
 
-  if(millis()-lastBtnModeMillis >= 200)
+  if(connected && millis() - lastReceiveTime > 3000){
+    connected = false;
+    displayMode = 4;
+    selectedPeer = 0;
+    discovery.discover();
+    lastDiscoveryTime = millis();
+    pairedIsBulky = false;
+    pairedIsThegill = false;
+    resetThegillState();
+  }
+
+  if(!pairedIsThegill && millis()-lastBtnModeMillis >= 200)
   {
     if(!ispressed){
     if(!digitalRead(joystickBtnA))
@@ -453,6 +689,13 @@ void loop() {
       if(homeMenuIndex < 0) homeMenuIndex += menuCount;
       lastEncoderCount = encoderCount;
     }
+  } else if(displayMode == 1 && pairedIsThegill){
+    int delta = encoderCount - lastEncoderCount;
+    if(delta != 0){
+      gillConfigIndex = (gillConfigIndex + delta) % 3;
+      if(gillConfigIndex < 0) gillConfigIndex += 3;
+      lastEncoderCount = encoderCount;
+    }
   } else if(displayMode == 4){
     int delta = encoderCount - lastEncoderCount;
     int count = discovery.getPeerCount() + 1; // include Home option
@@ -489,7 +732,7 @@ void loop() {
     } else if(displayMode == 0){
       switch(homeMenuIndex){
         case 0: displayMode = 5; break; // Dashboard
-        case 1: displayMode = 1; break; // Telemetry
+        case 1: displayMode = 1; gillConfigIndex = 0; break; // Telemetry / Config
         case 2: displayMode = 2; break; // PID Graph
         case 3: displayMode = 3; break; // Orientation
         case 4: displayMode = 4; selectedPeer = 0; break; // Pairing
@@ -505,9 +748,43 @@ void loop() {
         homeSelected = false;
         lastEncoderCount = encoderCount;
       } else if(count > 0){
-        const uint8_t *mac = discovery.getPeer(selectedPeer);
-        memcpy(targetAddress, mac, 6);
+        infoPeer = selectedPeer;
+        displayMode = 7;
+        homeSelected = false;
+        lastEncoderCount = encoderCount;
       }
+    } else if(displayMode == 1 && pairedIsThegill){
+      if(gillConfigIndex == 0){
+        thegillConfig.mode = (thegillConfig.mode == GillMode::Default) ? GillMode::Differential : GillMode::Default;
+        resetThegillState();
+      } else if(gillConfigIndex == 1){
+        int next = (static_cast<int>(thegillConfig.easing) + 1) % 5;
+        thegillConfig.easing = static_cast<GillEasing>(next);
+        thegillCommand.easing = thegillConfig.easing;
+      } else {
+        displayMode = 0;
+        homeMenuIndex = 1;
+        homeSelected = false;
+      }
+      lastEncoderCount = encoderCount;
+    } else if(displayMode == 7){
+      if(homeSelected){
+        displayMode = 4;
+        homeSelected = false;
+      }else{
+        const uint8_t *mac = discovery.getPeer(infoPeer);
+        memcpy(targetAddress, mac, 6);
+        const char* peerName = discovery.getPeerName(infoPeer);
+        pairedIsBulky = strcmp(peerName, "Bulky") == 0;
+        pairedIsThegill = isNameThegill(peerName);
+        if(pairedIsThegill){
+          resetThegillState();
+          gillConfigIndex = 0;
+        }
+        displayMode = 5;
+        homeSelected = false;
+      }
+      lastEncoderCount = encoderCount;
     } else if(displayMode == 2){
       displayMode = 0;
       homeMenuIndex = 2;
@@ -523,9 +800,23 @@ void loop() {
     isbeeping = 1; // audible feedback
   }
 
-  // Populate packet with desired control values
-  // Throttle maps joystick position directly to RC range for Dronegaze.
-  emission.throttle = map(analogRead(joystickA_Y), 0, 4096, 1000, 2000);
+  // Populate packet with desired control values.  Smooth the potentiometer
+  // used for throttle offset and map its full travel to 0–500 units.
+  static uint16_t potFiltered = analogRead(potA);
+  potFiltered = (potFiltered * 3 + analogRead(potA)) / 4; // IIR filter
+  uint16_t potOffset = map(potFiltered, 0, 4095, 0, 800);
+  potOffset = constrain(potOffset, 0, 800);
+
+  emission.throttle = constrain(
+      map(analogRead(joystickA_Y), 0, 4095, 2000, -1000) + potOffset,
+      1000,
+      2000);
+
+  // if (rawThrottle <= 2048) {
+  //   emission.throttle = 1000;
+  // } else {
+  //   emission.throttle = map(rawThrottle, 2048, 4095, 1000, 2000);
+  // }
 
   // Yaw is controlled incrementally: joystick deflection adjusts the
   // accumulated yaw command rather than setting an absolute angle.
@@ -534,9 +825,19 @@ void loop() {
   yawCommand = constrain(yawCommand + yawDelta, -180, 180);
   emission.yawAngle = yawCommand;
 
-  emission.rollAngle  = map(analogRead(joystickB_X),0,4096,-90,90);
-  emission.pitchAngle = map(analogRead(joystickB_Y),0,4096,-90,90);
+  int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
+  if (abs(roll) < 12) roll = 0; // eliminate small deadzone around center
+  emission.rollAngle = roll;
+
+  int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
+  if (abs(pitch) < 12) pitch = 0;
+  emission.pitchAngle = pitch;
   emission.arm_motors = btnmode;
+  if(pairedIsThegill){
+    updateThegillControl();
+  } else {
+    updateDroneControl();
+  }
 
   // Display rendering handled in FreeRTOS display task
 }

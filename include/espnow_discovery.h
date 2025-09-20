@@ -21,15 +21,18 @@ public:
     // Return true if at least one peer has been paired.
     bool hasPeers() const;
     // Retrieve the number of paired peers.
-    int  getPeerCount() const { return peerCount; }
-    // Get the MAC address of a paired peer by index.
-    const uint8_t* getPeer(int index) const { return peerMacs[index]; }
+      int  getPeerCount() const { return peerCount; }
+      // Get the MAC address of a paired peer by index.
+      const uint8_t* getPeer(int index) const { return peerMacs[index]; }
+      // Get the identity name of a paired peer by index.
+      const char* getPeerName(int index) const { return peerNames[index]; }
 
 private:
-    static constexpr int kMaxPeers = 5;
-    uint8_t peerMacs[kMaxPeers][6] = {};
-    bool    peerAcked[kMaxPeers] = {};
-    int     peerCount = 0;
-};
+      static constexpr int kMaxPeers = 5;
+      uint8_t peerMacs[kMaxPeers][6] = {};
+      bool    peerAcked[kMaxPeers] = {};
+      int     peerCount = 0;
+      char    peerNames[kMaxPeers][16] = {};
+  };
 
 #endif // ESPNOW_DISCOVERY_H

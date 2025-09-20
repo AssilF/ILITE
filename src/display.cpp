@@ -1,5 +1,9 @@
 #include "display.h"
+#include "thegill.h"
+#include <ctype.h>
+#include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 
@@ -9,6 +13,29 @@ bool homeSelected = false;
 int selectedPeer = 0;
 int lastEncoderCount = 0;
 unsigned long lastDiscoveryTime = 0;
+int infoPeer = 0;
+bool pairedIsBulky = false;
+bool pairedIsThegill = false;
+int gillConfigIndex = 0;
+
+static const char* modeToString(GillMode mode){
+  switch(mode){
+    case GillMode::Differential: return "Differential";
+    case GillMode::Default:
+    default: return "Default";
+  }
+}
+
+static const char* easingToString(GillEasing easing){
+  switch(easing){
+    case GillEasing::Linear: return "Linear";
+    case GillEasing::EaseIn: return "Ease In";
+    case GillEasing::EaseOut: return "Ease Out";
+    case GillEasing::EaseInOut: return "Ease InOut";
+    case GillEasing::Sine:
+    default: return "Sine";
+  }
+}
 
 #define displayWidth 128
 #define displayHeight 64
@@ -213,6 +240,11 @@ void drawDrongazInterface(){
 }
 
 void drawTelemetryInfo(){
+  if(pairedIsThegill){
+    drawThegillConfig();
+    return;
+  }
+
   oled.clearBuffer();
   drawHeader("Telemetry");
   oled.setFont(smallFont);
@@ -260,19 +292,21 @@ void drawPidGraph(){
 void drawOrientationCube(){
   oled.clearBuffer();
   drawHeader("Orientation");
-  const float size = 15.0f;
+  const float xSize = 20.0f;
+  const float ySize = 10.0f;
+  const float zSize = 5.0f;
   const int cx = screen_Width/2;
   const int cy = screen_Height/2 + 6;
   struct Vec3 { float x,y,z; };
   const Vec3 verts[8] = {
-    {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
-    {-size,-size, size}, { size,-size, size}, { size, size, size}, {-size, size, size}
+    {-xSize,-ySize,-zSize}, { xSize,-ySize,-zSize}, { xSize, ySize,-zSize}, {-xSize, ySize,-zSize},
+    {-xSize,-ySize, zSize}, { xSize,-ySize, zSize}, { xSize, ySize, zSize}, {-xSize, ySize, zSize}
   };
   int px[8];
   int py[8];
   float roll  = telemetry.roll  * DEG_TO_RAD;
-  float pitch = telemetry.pitch * DEG_TO_RAD;
-  float yaw   = telemetry.yaw   * DEG_TO_RAD;
+  float pitch = -telemetry.pitch * DEG_TO_RAD;
+  float yaw   = -telemetry.yaw   * DEG_TO_RAD + PI;
   for(int i=0;i<8;i++){
     float x=verts[i].x;
     float y=verts[i].y;
@@ -315,13 +349,10 @@ void drawPairingMenu(){
   oled.setFont(textFont);
   int count = discovery.getPeerCount();
   for(int i=0;i<count && i<4;i++){
-    const uint8_t *mac = discovery.getPeer(i);
+    const char* name = discovery.getPeerName(i);
     oled.setCursor(0, 22 + i*12);
     if(i==selectedPeer) oled.print(">"); else oled.print(" ");
-    char buf[18];
-    sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
-            mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-    oled.print(buf);
+    oled.print(name);
   }
   oled.setCursor(0, 22 + count*12);
   if(selectedPeer == count) oled.print(">"); else oled.print(" ");
@@ -329,11 +360,57 @@ void drawPairingMenu(){
   oled.sendBuffer();
 }
 
+void drawPeerInfo(){
+  oled.clearBuffer();
+  drawHeader("Device Info");
+  oled.setFont(textFont);
+  const char* name = discovery.getPeerName(infoPeer);
+  const uint8_t* mac = discovery.getPeer(infoPeer);
+  oled.setCursor(0,22); oled.print("Device: "); oled.print(name);
+  char buf[18];
+  sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  oled.setCursor(0,34); oled.print("MAC: "); oled.print(buf);
+  bool isGill = false;
+  size_t nameLen = strlen(name);
+  for(size_t i = 0; i + 3 < nameLen; ++i){
+    if(tolower(static_cast<unsigned char>(name[i])) == 'g' &&
+       tolower(static_cast<unsigned char>(name[i+1])) == 'i' &&
+       tolower(static_cast<unsigned char>(name[i+2])) == 'l' &&
+       tolower(static_cast<unsigned char>(name[i+3])) == 'l'){
+      isGill = true;
+      break;
+    }
+  }
+  if(strcmp(name, "Bulky") == 0){
+    oled.setCursor(0,46);
+    oled.print("Bulky detected");
+  } else if(isGill){
+    oled.setCursor(0,46);
+    oled.print("The'gill detected");
+  }
+  oled.setCursor(0,60);
+  if(homeSelected){
+    oled.print(">Return");
+    oled.setCursor(60,60); oled.print("Pair");
+  }else{
+    oled.print(">Pair");
+    oled.setCursor(60,60); oled.print("Return");
+  }
+  oled.sendBuffer();
+}
+
 void drawHomeMenu(){
   oled.clearBuffer();
   drawHeader("Menu");
   oled.setFont(textFont);
-  const char* items[] = {"Dashboard","Telemetry","PID Graph","Orientation","Pairing","About"};
+  const char* items[] = {
+    "Dashboard",
+    pairedIsThegill ? "Config" : "Telemetry",
+    "PID Graph",
+    "Orientation",
+    "Pairing",
+    "About"
+  };
   for(int i=0;i<6;i++){
     oled.setCursor(0,22 + i*10);
     if(i==homeMenuIndex) oled.print(">"); else oled.print(" ");
@@ -348,7 +425,73 @@ void drawHomeFooter(){
   oled.print("Home");
 }
 
+static void drawMotorBar(int x, int y, float actual, float target){
+  const int width = 72;
+  const int height = 10;
+  const int mid = x + width / 2;
+  const int range = width / 2 - 2;
+  oled.drawFrame(x, y, width, height);
+  int actualPixels = static_cast<int>(roundf(constrain(actual, -1.f, 1.f) * range));
+  if(actualPixels >= 0){
+    oled.drawBox(mid, y + 1, actualPixels, height - 2);
+  } else {
+    oled.drawBox(mid + actualPixels, y + 1, -actualPixels, height - 2);
+  }
+  int targetPixels = static_cast<int>(roundf(constrain(target, -1.f, 1.f) * range));
+  oled.drawLine(mid + targetPixels, y, mid + targetPixels, y + height - 1);
+}
+
+void drawThegillDashboard(){
+  oled.clearBuffer();
+  drawHeader("The'gill S3");
+  oled.setFont(smallFont);
+  oled.setCursor(0,14); oled.print("Mode: "); oled.print(modeToString(thegillConfig.mode));
+  oled.setCursor(0,22); oled.print("Ease: "); oled.print(easingToString(thegillConfig.easing));
+  oled.setCursor(0,30); oled.print("Rate: "); oled.print(thegillRuntime.easingRate, 1);
+
+  float leftTarget = (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear) * 0.5f;
+  float rightTarget = (thegillRuntime.targetRightFront + thegillRuntime.targetRightRear) * 0.5f;
+  float leftActual = (thegillRuntime.actualLeftFront + thegillRuntime.actualLeftRear) * 0.5f;
+  float rightActual = (thegillRuntime.actualRightFront + thegillRuntime.actualRightRear) * 0.5f;
+
+  oled.setCursor(0,42); oled.print("Left");
+  drawMotorBar(40, 36, leftActual, leftTarget);
+  oled.setCursor(0,56); oled.print("Right");
+  drawMotorBar(40, 50, rightActual, rightTarget);
+
+  oled.setCursor(100,14); oled.print(thegillRuntime.brakeActive ? "BRK" : "   ");
+  oled.setCursor(100,22); oled.print(thegillRuntime.honkActive ? "HNK" : "   ");
+
+  oled.sendBuffer();
+}
+
+void drawThegillConfig(){
+  oled.clearBuffer();
+  drawHeader("Gill Config");
+  oled.setFont(smallFont);
+  const char* labels[] = {"Mode", "Easing", "Back"};
+  const char* values[] = {
+    modeToString(thegillConfig.mode),
+    easingToString(thegillConfig.easing),
+    ""};
+  for(int i = 0; i < 3; ++i){
+    oled.setCursor(0, 22 + i * 12);
+    oled.print(i == gillConfigIndex ? ">" : " ");
+    oled.print(labels[i]);
+    if(i < 2){
+      oled.setCursor(60, 22 + i * 12);
+      oled.print(values[i]);
+    }
+  }
+  oled.sendBuffer();
+}
+
 void drawDashboard(){
+  if(pairedIsThegill){
+    drawThegillDashboard();
+    return;
+  }
+
   oled.clearBuffer();
   if(!discovery.hasPeers()){
     oled.setFont(smallFont);
@@ -359,19 +502,21 @@ void drawDashboard(){
     return;
   }
 
-  const float size = 15.0f;
+  const float xSize = 20.0f;
+  const float ySize = 10.0f;
+  const float zSize = 5.0f;
   const int cx = screen_Width/2;
   const int cy = screen_Height/2 + 6;
   struct Vec3 { float x,y,z; };
   const Vec3 verts[8] = {
-    {-size,-size,-size}, { size,-size,-size}, { size, size,-size}, {-size, size,-size},
-    {-size,-size, size}, { size,-size, size}, { size, size, size}, {-size, size, size}
+    {-xSize,-ySize,-zSize}, { xSize,-ySize,-zSize}, { xSize, ySize,-zSize}, {-xSize, ySize,-zSize},
+    {-xSize,-ySize, zSize}, { xSize,-ySize, zSize}, { xSize, ySize, zSize}, {-xSize, ySize, zSize}
   };
   int px[8];
   int py[8];
   float roll  = telemetry.roll  * DEG_TO_RAD;
-  float pitch = telemetry.pitch * DEG_TO_RAD;
-  float yaw   = telemetry.yaw   * DEG_TO_RAD;
+  float pitch = -telemetry.pitch * DEG_TO_RAD;
+  float yaw   = -telemetry.yaw   * DEG_TO_RAD + PI;
   for(int i=0;i<8;i++){
     float x=verts[i].x;
     float y=verts[i].y;
@@ -403,6 +548,11 @@ void drawDashboard(){
     int head = cy - arrowLen;
     oled.drawTriangle(cx, head, cx-3, head + (arrowLen>0?-5:5),
                       cx+3, head + (arrowLen>0?-5:5));
+  }
+  if(pairedIsBulky){
+    oled.setFont(smallFont);
+    oled.setCursor(90,8);
+    oled.print("Bulky");
   }
   oled.setFont(smallFont);
   oled.setCursor(0,8);  oled.print("Alt:"); oled.print(telemetry.altitude);
