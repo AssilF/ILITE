@@ -42,6 +42,8 @@ xTimerHandle encoderActionPollTimer = NULL;
 xTaskHandle displayEngine = NULL;
 xTaskHandle commsEngine = NULL;
 
+
+
 bool isbeeping=1;
 
 bool botmode=0;
