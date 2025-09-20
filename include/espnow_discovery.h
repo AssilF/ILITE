@@ -26,6 +26,9 @@ public:
       const uint8_t* getPeer(int index) const { return peerMacs[index]; }
       // Get the identity name of a paired peer by index.
       const char* getPeerName(int index) const { return peerNames[index]; }
+      // Find the index of a peer with the provided MAC address. Returns -1
+      // when the peer is unknown.
+      int findPeerIndex(const uint8_t* mac) const;
 
 private:
       static constexpr int kMaxPeers = 5;
