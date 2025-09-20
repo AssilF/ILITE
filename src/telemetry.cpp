@@ -4,6 +4,7 @@
 ThrustCommand emission{PACKET_MAGIC, 1000, 0, 0, 0, false};
 receptionDataPacket reception{};
 TelemetryPacket telemetry{};
+BulkyCommand bulkyCommand{0, 0, 0, {0, 0, 0}};
 int16_t pidPitchHistory[screen_Width];
 int16_t pidRollHistory[screen_Width];
 int16_t pidYawHistory[screen_Width];
