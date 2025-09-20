@@ -106,3 +106,15 @@ bool EspNowDiscovery::hasPeers() const {
     return peerCount > 0;
 }
 
+int EspNowDiscovery::findPeerIndex(const uint8_t* mac) const {
+    if(mac == nullptr){
+        return -1;
+    }
+    for(int i = 0; i < peerCount; ++i){
+        if(memcmp(peerMacs[i], mac, 6) == 0){
+            return i;
+        }
+    }
+    return -1;
+}
+
