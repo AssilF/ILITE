@@ -425,6 +425,7 @@ void drawHomeFooter(){
   oled.print("Home");
 }
 
+
 static void drawMotorBar(int x, int y, float actual, float target){
   const int width = 72;
   const int height = 10;
@@ -437,9 +438,22 @@ static void drawMotorBar(int x, int y, float actual, float target){
     oled.drawBox(mid, y + 1, actualPixels, height - 2);
   } else {
     oled.drawBox(mid + actualPixels, y + 1, -actualPixels, height - 2);
+
   }
-  int targetPixels = static_cast<int>(roundf(constrain(target, -1.f, 1.f) * range));
-  oled.drawLine(mid + targetPixels, y, mid + targetPixels, y + height - 1);
+  oled.print(percent);
+  oled.print('%');
+}
+
+static void drawMotorValue(int x, int y, const char* label, float actual, float target){
+  oled.setCursor(x, y);
+  oled.print(label);
+  oled.print(':');
+  oled.setCursor(x + 16, y);
+  printMotorPercent(actual);
+  oled.setCursor(x + 44, y);
+  oled.print("->");
+  oled.setCursor(x + 58, y);
+  printMotorPercent(target);
 }
 
 static void formatMotorPercent(float value, char* buffer, size_t size){
@@ -480,6 +494,7 @@ void drawThegillDashboard(){
   oled.setCursor(0,22); oled.print("Ease: "); oled.print(easingToString(thegillConfig.easing));
   oled.setCursor(0,30); oled.print("Rate: "); oled.print(thegillRuntime.easingRate, 1);
 
+
   float leftTarget = (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear) * 0.5f;
   float rightTarget = (thegillRuntime.targetRightFront + thegillRuntime.targetRightRear) * 0.5f;
   float leftActual = (thegillRuntime.actualLeftFront + thegillRuntime.actualLeftRear) * 0.5f;
@@ -494,6 +509,7 @@ void drawThegillDashboard(){
   drawMotorBar(40, 50, rightActual, rightTarget);
   drawMotorBarLabels(40, 50, "RF", thegillRuntime.actualRightFront,
                               "RR", thegillRuntime.actualRightRear);
+
 
   oled.setCursor(100,14); oled.print(thegillRuntime.brakeActive ? "BRK" : "   ");
   oled.setCursor(100,22); oled.print(thegillRuntime.honkActive ? "HNK" : "   ");
