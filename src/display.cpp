@@ -425,20 +425,25 @@ void drawHomeFooter(){
   oled.print("Home");
 }
 
-static void drawMotorBar(int x, int y, float actual, float target){
-  const int width = 72;
-  const int height = 10;
-  const int mid = x + width / 2;
-  const int range = width / 2 - 2;
-  oled.drawFrame(x, y, width, height);
-  int actualPixels = static_cast<int>(roundf(constrain(actual, -1.f, 1.f) * range));
-  if(actualPixels >= 0){
-    oled.drawBox(mid, y + 1, actualPixels, height - 2);
-  } else {
-    oled.drawBox(mid + actualPixels, y + 1, -actualPixels, height - 2);
+static void printMotorPercent(float value){
+  int percent = static_cast<int>(roundf(constrain(value, -1.f, 1.f) * 100.f));
+  if(percent >= 0){
+    oled.print('+');
   }
-  int targetPixels = static_cast<int>(roundf(constrain(target, -1.f, 1.f) * range));
-  oled.drawLine(mid + targetPixels, y, mid + targetPixels, y + height - 1);
+  oled.print(percent);
+  oled.print('%');
+}
+
+static void drawMotorValue(int x, int y, const char* label, float actual, float target){
+  oled.setCursor(x, y);
+  oled.print(label);
+  oled.print(':');
+  oled.setCursor(x + 16, y);
+  printMotorPercent(actual);
+  oled.setCursor(x + 44, y);
+  oled.print("->");
+  oled.setCursor(x + 58, y);
+  printMotorPercent(target);
 }
 
 void drawThegillDashboard(){
@@ -449,15 +454,10 @@ void drawThegillDashboard(){
   oled.setCursor(0,22); oled.print("Ease: "); oled.print(easingToString(thegillConfig.easing));
   oled.setCursor(0,30); oled.print("Rate: "); oled.print(thegillRuntime.easingRate, 1);
 
-  float leftTarget = (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear) * 0.5f;
-  float rightTarget = (thegillRuntime.targetRightFront + thegillRuntime.targetRightRear) * 0.5f;
-  float leftActual = (thegillRuntime.actualLeftFront + thegillRuntime.actualLeftRear) * 0.5f;
-  float rightActual = (thegillRuntime.actualRightFront + thegillRuntime.actualRightRear) * 0.5f;
-
-  oled.setCursor(0,42); oled.print("Left");
-  drawMotorBar(40, 36, leftActual, leftTarget);
-  oled.setCursor(0,56); oled.print("Right");
-  drawMotorBar(40, 50, rightActual, rightTarget);
+  drawMotorValue(0, 42, "LF", thegillRuntime.actualLeftFront, thegillRuntime.targetLeftFront);
+  drawMotorValue(0, 54, "LR", thegillRuntime.actualLeftRear, thegillRuntime.targetLeftRear);
+  drawMotorValue(64, 42, "RF", thegillRuntime.actualRightFront, thegillRuntime.targetRightFront);
+  drawMotorValue(64, 54, "RR", thegillRuntime.actualRightRear, thegillRuntime.targetRightRear);
 
   oled.setCursor(100,14); oled.print(thegillRuntime.brakeActive ? "BRK" : "   ");
   oled.setCursor(100,22); oled.print(thegillRuntime.honkActive ? "HNK" : "   ");
