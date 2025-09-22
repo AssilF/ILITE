@@ -430,6 +430,7 @@ static void drawMotorBar(int x, int y, float actual, float target){
   const int height = 10;
   const int mid = x + width / 2;
   const int range = width / 2 - 2;
+  oled.setDrawColor(1);
   oled.drawFrame(x, y, width, height);
   int actualPixels = static_cast<int>(roundf(constrain(actual, -1.f, 1.f) * range));
   if(actualPixels >= 0){
@@ -439,6 +440,36 @@ static void drawMotorBar(int x, int y, float actual, float target){
   }
   int targetPixels = static_cast<int>(roundf(constrain(target, -1.f, 1.f) * range));
   oled.drawLine(mid + targetPixels, y, mid + targetPixels, y + height - 1);
+}
+
+static void formatMotorPercent(float value, char* buffer, size_t size){
+  int percent = static_cast<int>(roundf(constrain(value, -1.f, 1.f) * 100.f));
+  snprintf(buffer, size, "%+d%%", percent);
+}
+
+static void drawMotorBarLabels(int x, int y,
+                               const char* frontLabel, float frontValue,
+                               const char* rearLabel, float rearValue){
+  const int width = 72;
+  const int height = 10;
+  char frontBuf[8];
+  char rearBuf[8];
+  formatMotorPercent(frontValue, frontBuf, sizeof(frontBuf));
+  formatMotorPercent(rearValue, rearBuf, sizeof(rearBuf));
+
+  char line[32];
+  snprintf(line, sizeof(line), "%s%s %s%s", frontLabel, frontBuf, rearLabel, rearBuf);
+
+  int textWidth = oled.getUTF8Width(line);
+  int cursorX = x + (width - textWidth) / 2;
+  if(cursorX < x + 1){
+    cursorX = x + 1;
+  }
+
+  oled.setDrawColor(2);
+  oled.setCursor(cursorX, y + height - 2);
+  oled.print(line);
+  oled.setDrawColor(1);
 }
 
 void drawThegillDashboard(){
@@ -456,8 +487,13 @@ void drawThegillDashboard(){
 
   oled.setCursor(0,42); oled.print("Left");
   drawMotorBar(40, 36, leftActual, leftTarget);
+  drawMotorBarLabels(40, 36, "LF", thegillRuntime.actualLeftFront,
+                             "LR", thegillRuntime.actualLeftRear);
+
   oled.setCursor(0,56); oled.print("Right");
   drawMotorBar(40, 50, rightActual, rightTarget);
+  drawMotorBarLabels(40, 50, "RF", thegillRuntime.actualRightFront,
+                              "RR", thegillRuntime.actualRightRear);
 
   oled.setCursor(100,14); oled.print(thegillRuntime.brakeActive ? "BRK" : "   ");
   oled.setCursor(100,22); oled.print(thegillRuntime.honkActive ? "HNK" : "   ");
