@@ -690,6 +690,12 @@ unsigned long lastBtnModeMillis;
 bool ispressed;
 
 void loop() {
+  uint32_t now = millis();
+  static uint32_t lastPairMaintenance = 0;
+  if(now - lastPairMaintenance >= 200){
+    discovery.discover();
+    lastPairMaintenance = now;
+  }
   ArduinoOTA.handle();
   checkPress();
   beep();
