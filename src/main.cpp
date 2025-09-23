@@ -102,6 +102,9 @@ bool connected = false;
 // joystick position.
 int16_t yawCommand = 0;
 
+// Global botSpeed variable
+int8_t botSpeed = 0;
+
 static bool isNameThegill(const char* name){
   if(name == nullptr) return false;
   size_t len = strlen(name);
@@ -256,12 +259,6 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   connected = true;
 
 }
-
- 
-
-
-
-int8_t botSpeed;
 
 void processSpeed(int a)
 {
@@ -585,6 +582,7 @@ void setup() {
 
   //Init Wifi & ESPNOW ===============
   WiFi.mode(WIFI_AP_STA); //just in case this is what helped with the uncought load prohibition exception.
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.softAP(ssid, password);
   Serial.println("Wifi ON");
   ArduinoOTA.onStart([]() {

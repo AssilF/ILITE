@@ -440,6 +440,13 @@ static void drawMotorBar(int x, int y, float actual, float target){
     oled.drawBox(mid + actualPixels, y + 1, -actualPixels, height - 2);
 
   }
+  int percent = static_cast<int>(roundf(constrain(actual, -1.f, 1.f) * 100.f));
+  oled.print(percent);
+  oled.print('%');
+}
+
+static void printMotorPercent(float value) {
+  int percent = static_cast<int>(roundf(constrain(value, -1.f, 1.f) * 100.f));
   oled.print(percent);
   oled.print('%');
 }
