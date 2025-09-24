@@ -14,9 +14,9 @@ int selectedPeer = 0;
 int lastEncoderCount = 0;
 unsigned long lastDiscoveryTime = 0;
 int infoPeer = 0;
-bool pairedIsBulky = false;
-bool pairedIsThegill = false;
 int gillConfigIndex = 0;
+int globalMenuIndex = 0;
+int dashboardFocusIndex = 0;
 
 static const char* modeToString(GillMode mode){
   switch(mode){
@@ -35,6 +35,65 @@ static const char* easingToString(GillEasing easing){
     case GillEasing::Sine:
     default: return "Sine";
   }
+}
+
+void drawLayoutCardFrame(int16_t x, int16_t y, const char* title, const char* subtitle, bool focused){
+  const int16_t width = screen_Width - x * 2;
+  const int16_t height = 40;
+  oled.setDrawColor(1);
+  oled.drawRFrame(x, y, width, height, 6);
+  if(focused){
+    oled.drawRFrame(x + 1, y + 1, width - 2, height - 2, 6);
+  }
+  oled.setFont(textFont);
+  oled.setCursor(x + 6, y + 14);
+  oled.print(title);
+  oled.setFont(smallFont);
+  oled.setCursor(x + 6, y + 26);
+  oled.print(subtitle);
+}
+
+static void drawWifiStatusBadge(const ModuleState& state, int16_t right, int16_t y){
+  oled.setFont(smallFont);
+  const char* label = state.wifiEnabled ? "WiFi On" : "WiFi Off";
+  int16_t width = oled.getUTF8Width(label);
+  int16_t cursor = right - width;
+  if(cursor < 0) cursor = 0;
+  oled.setCursor(cursor, y);
+  oled.print(label);
+}
+
+void drawGenericLayoutCard(const ModuleState& state, int16_t x, int16_t y, bool focused){
+  const ModuleState* active = getActiveModule();
+  const bool isActive = active == &state;
+  const int16_t width = screen_Width - x * 2;
+  drawLayoutCardFrame(x, y, "DroneGaze", isActive ? "Active layout" : "Flight telemetry", focused);
+  oled.setFont(smallIconFont);
+  oled.setCursor(x + width / 2 - 5, y + 32);
+  oled.print("\u00a5");
+  drawWifiStatusBadge(state, x + width - 6, y + 14);
+}
+
+void drawBulkyLayoutCard(const ModuleState& state, int16_t x, int16_t y, bool focused){
+  const ModuleState* active = getActiveModule();
+  const bool isActive = active == &state;
+  const int16_t width = screen_Width - x * 2;
+  drawLayoutCardFrame(x, y, "Bulky", isActive ? "Active layout" : "Utility carrier", focused);
+  oled.setFont(smallIconFont);
+  oled.setCursor(x + width / 2 - 5, y + 32);
+  oled.print("\u00f7");
+  drawWifiStatusBadge(state, x + width - 6, y + 14);
+}
+
+void drawThegillLayoutCard(const ModuleState& state, int16_t x, int16_t y, bool focused){
+  const ModuleState* active = getActiveModule();
+  const bool isActive = active == &state;
+  const int16_t width = screen_Width - x * 2;
+  drawLayoutCardFrame(x, y, "The'gill", isActive ? "Active layout" : "Differential drive", focused);
+  oled.setFont(smallIconFont);
+  oled.setCursor(x + width / 2 - 5, y + 32);
+  oled.print("\u00dd");
+  drawWifiStatusBadge(state, x + width - 6, y + 14);
 }
 
 #define displayWidth 128
@@ -240,7 +299,8 @@ void drawDrongazInterface(){
 }
 
 void drawTelemetryInfo(){
-  if(pairedIsThegill){
+  ModuleState* active = getActiveModule();
+  if(active && active->descriptor->kind == PeerKind::Thegill){
     drawThegillConfig();
     return;
   }
@@ -401,21 +461,44 @@ void drawPeerInfo(){
 
 void drawHomeMenu(){
   oled.clearBuffer();
-  drawHeader("Menu");
-  oled.setFont(textFont);
-  const char* items[] = {
-    "Dashboard",
-    pairedIsThegill ? "Config" : "Telemetry",
-    "PID Graph",
-    "Orientation",
-    "Pairing",
-    "About"
-  };
-  for(int i=0;i<6;i++){
-    oled.setCursor(0,22 + i*10);
-    if(i==homeMenuIndex) oled.print(">"); else oled.print(" ");
-    oled.print(items[i]);
+  drawHeader("Layouts");
+  size_t moduleCount = getModuleStateCount();
+  if(moduleCount == 0){
+    oled.setFont(smallFont);
+    oled.setCursor(8, 32);
+    oled.print("No layouts available");
+    oled.sendBuffer();
+    return;
   }
+
+  if(homeMenuIndex < 0) homeMenuIndex = 0;
+  if(homeMenuIndex >= static_cast<int>(moduleCount)) homeMenuIndex = static_cast<int>(moduleCount) - 1;
+
+  ModuleState* state = getModuleState(static_cast<size_t>(homeMenuIndex));
+  const int16_t cardX = 6;
+  const int16_t cardY = 16;
+  if(state && state->descriptor && state->descriptor->drawLayoutCard){
+    state->descriptor->drawLayoutCard(*state, cardX, cardY, true);
+  }
+
+  if(moduleCount > 1){
+    if(homeMenuIndex > 0){
+      oled.drawTriangle(2, 36, 6, 30, 6, 42);
+    }
+    if(homeMenuIndex + 1 < static_cast<int>(moduleCount)){
+      int16_t x = screen_Width - 2;
+      oled.drawTriangle(x, 36, x-4, 30, x-4, 42);
+    }
+  }
+
+  oled.setFont(smallFont);
+  oled.setCursor(4, screen_Height - 2);
+  oled.print("Press to activate");
+  char buffer[12];
+  snprintf(buffer, sizeof(buffer), "%d/%d", homeMenuIndex + 1, static_cast<int>(moduleCount));
+  int width = oled.getUTF8Width(buffer);
+  oled.setCursor(screen_Width - width - 2, screen_Height - 2);
+  oled.print(buffer);
   oled.sendBuffer();
 }
 
@@ -423,6 +506,58 @@ void drawHomeFooter(){
   oled.setCursor(0,60);
   if(homeSelected) oled.print(">"); else oled.print(" ");
   oled.print("Home");
+}
+
+void drawGlobalMenu(){
+  oled.clearBuffer();
+  drawHeader("Menu");
+  ModuleState* active = getActiveModule();
+  const char* baseItems[] = {
+    "Dashboard",
+    (active && active->descriptor->kind == PeerKind::Thegill) ? "Config" : "Telemetry",
+    "PID Graph",
+    "Orientation",
+    "Pairing",
+    "About"
+  };
+  const int baseCount = sizeof(baseItems) / sizeof(baseItems[0]);
+  const int functionEntryOffset = baseCount;
+  const int wifiEntryIndex = functionEntryOffset + 3;
+  const int backEntryIndex = wifiEntryIndex + 1;
+  const int totalCount = backEntryIndex + 1;
+
+  oled.setFont(smallFont);
+  int y = 18;
+  for(int i = 0; i < totalCount; ++i){
+    oled.setCursor(0, y);
+    oled.print(i == globalMenuIndex ? ">" : " ");
+    if(i < baseCount){
+      oled.print(baseItems[i]);
+    } else if(i < wifiEntryIndex){
+      int slot = i - functionEntryOffset;
+      if(active){
+        const FunctionActionOption* action = getAssignedAction(*active, slot);
+        oled.print("Key "); oled.print(slot + 1); oled.print(": ");
+        oled.print(action ? action->name : "--");
+      } else {
+        oled.print("Key "); oled.print(slot + 1); oled.print(": --");
+      }
+    } else if(i == wifiEntryIndex){
+      oled.print("WiFi: ");
+      if(active && active->wifiEnabled){
+        oled.print("Enabled");
+      } else {
+        oled.print("Disabled");
+      }
+    } else {
+      oled.print("Back");
+    }
+    y += 10;
+  }
+
+  oled.setCursor(0, 62);
+  oled.print("Press to select");
+  oled.sendBuffer();
 }
 
 
@@ -520,8 +655,6 @@ void drawThegillDashboard(){
 
   oled.setCursor(100,14); oled.print(thegillRuntime.brakeActive ? "BRK" : "   ");
   oled.setCursor(100,22); oled.print(thegillRuntime.honkActive ? "HNK" : "   ");
-
-  oled.sendBuffer();
 }
 
 void drawThegillConfig(){
@@ -545,7 +678,7 @@ void drawThegillConfig(){
   oled.sendBuffer();
 }
 
-static void drawBulkyDashboard(){
+void drawBulkyDashboard(){
   oled.clearBuffer();
   drawFirePosition();
   drawLine();
@@ -553,27 +686,15 @@ static void drawBulkyDashboard(){
   drawPeripheralJoystickPose();
   drawProximity();
   drawSpeed();
-  oled.sendBuffer();
 }
 
-void drawDashboard(){
-  if(pairedIsThegill){
-    drawThegillDashboard();
-    return;
-  }
-
-  if(pairedIsBulky){
-    drawBulkyDashboard();
-    return;
-  }
-
+void drawGenericDashboard(){
   oled.clearBuffer();
   if(!discovery.hasPeers()){
     oled.setFont(smallFont);
     uint8_t w = oled.getUTF8Width("Pair a device");
     oled.setCursor((screen_Width - w)/2, screen_Height/2);
     oled.print("Pair a device");
-    oled.sendBuffer();
     return;
   }
 
@@ -624,17 +745,84 @@ void drawDashboard(){
     oled.drawTriangle(cx, head, cx-3, head + (arrowLen>0?-5:5),
                       cx+3, head + (arrowLen>0?-5:5));
   }
-  if(pairedIsBulky){
-    oled.setFont(smallFont);
-    oled.setCursor(90,8);
-    oled.print("Bulky");
-  }
   oled.setFont(smallFont);
   oled.setCursor(0,8);  oled.print("Alt:"); oled.print(telemetry.altitude);
   oled.setCursor(0,16); oled.print("Thr:"); oled.print(emission.throttle);
   oled.setCursor(0,24); oled.print("P:");   oled.print(emission.pitchAngle);
   oled.setCursor(0,32); oled.print("R:");   oled.print(emission.rollAngle);
   oled.setCursor(0,40); oled.print("Y:");   oled.print(emission.yawAngle);
+}
+
+static void drawDashboardOverlays(){
+  ModuleState* active = getActiveModule();
+  if(!active) return;
+  auto drawChip = [&](int16_t x, int16_t y, const char* label, bool focused){
+    const int16_t width = 34;
+    const int16_t height = 12;
+    if(focused){
+      oled.setDrawColor(1);
+      oled.drawRBox(x, y, width, height, 3);
+      oled.setDrawColor(0);
+    } else {
+      oled.setDrawColor(1);
+      oled.drawRFrame(x, y, width, height, 3);
+    }
+    oled.setFont(smallFont);
+    int16_t textWidth = oled.getUTF8Width(label);
+    int16_t textX = x + (width - textWidth)/2;
+    if(textX < x + 2) textX = x + 2;
+    oled.setCursor(textX, y + height - 3);
+    oled.print(label);
+    oled.setDrawColor(1);
+  };
+
+  const int16_t chipX = screen_Width - 36;
+  drawChip(chipX, 0, "Menu", dashboardFocusIndex == 1);
+  drawChip(chipX, 14, "WiFi", dashboardFocusIndex == 2);
+
+  // WiFi indicator dot
+  int16_t dotX = chipX + 26;
+  int16_t dotY = 20;
+  if(active->wifiEnabled){
+    oled.drawDisc(dotX, dotY, 2);
+  } else {
+    oled.drawCircle(dotX, dotY, 2);
+  }
+
+  // Function key bar at bottom
+  const int16_t slotWidth = screen_Width / 3;
+  for(size_t slot = 0; slot < 3; ++slot){
+    const FunctionActionOption* action = getAssignedAction(*active, slot);
+    const char* label = action ? action->shortLabel : "---";
+    bool activeState = getFunctionOutput(*active, slot);
+    int16_t x = slot * slotWidth;
+    int16_t width = (slot == 2) ? screen_Width - x : slotWidth;
+    if(activeState){
+      oled.setDrawColor(1);
+      oled.drawBox(x, screen_Height - 11, width - 1, 11);
+      oled.setDrawColor(0);
+    } else {
+      oled.setDrawColor(1);
+      oled.drawFrame(x, screen_Height - 11, width - 1, 11);
+    }
+    oled.setFont(smallFont);
+    int16_t labelWidth = oled.getUTF8Width(label);
+    int16_t textX = x + (width - 1 - labelWidth) / 2;
+    if(textX < x + 1) textX = x + 1;
+    oled.setCursor(textX, screen_Height - 2);
+    oled.print(label);
+    oled.setDrawColor(1);
+  }
+}
+
+void drawDashboard(){
+  ModuleState* active = getActiveModule();
+  if(active && active->descriptor && active->descriptor->drawDashboard){
+    active->descriptor->drawDashboard();
+  } else {
+    drawGenericDashboard();
+  }
+  drawDashboardOverlays();
   oled.sendBuffer();
 }
 
