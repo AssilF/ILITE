@@ -2,7 +2,6 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <ArduinoOTA.h>
-#include <DacESP32.h>
 #include <math.h>
 #include <ctype.h>
 #include <string.h>
@@ -13,6 +12,8 @@
 #include "input.h"
 #include "telemetry.h"
 #include "thegill.h"
+#include "audio_feedback.h"
+#include "ui_modules.h"
 
 //debug interface
 #define verboseEn 1
@@ -33,7 +34,6 @@ const char* password = "ASCE321#";
 #define LED_Pin 2     //by setting this as a reference for an internal comparator, we should get a controller low battery flag.
 
 //Instances
-DacESP32 buzzer(buzzer_Pin);
 EspNowDiscovery discovery;
 
 //tasks at the time being, we have no need for this it seems. . . 
@@ -44,12 +44,9 @@ xTaskHandle commsEngine = NULL;
 
 
 
-bool isbeeping=1;
-
 bool botmode=0;
 bool lastbtn;
 bool btnmode = false;
-unsigned long beepMillis = 0;
 
 
 
@@ -94,6 +91,13 @@ static bool sent_Status;
 static bool receive_Status;
 unsigned long lastReceiveTime = 0;
 bool connected = false;
+
+static bool dronePrecisionMode = false;
+static bool bulkyHonkLatch = false;
+static bool bulkyLightLatch = false;
+static bool bulkySlowMode = false;
+static bool gillHonkLatch = false;
+static bool functionButtonLatch[3] = {false, false, false};
 
 
 
@@ -189,6 +193,10 @@ static float readJoystickAxis(uint8_t pin, size_t index){
   return constrain(value, -1.f, 1.f);
 }
 
+static void handleGenericIncoming(ModuleState& state, const uint8_t* data, size_t length);
+static void handleBulkyIncoming(ModuleState& state, const uint8_t* data, size_t length);
+static void handleGillIncoming(ModuleState& state, const uint8_t* data, size_t length);
+
 //Coms Fcns
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
@@ -217,44 +225,44 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     int peerIndex = discovery.findPeerIndex(mac);
     if(peerIndex >= 0){
       const char* peerName = discovery.getPeerName(peerIndex);
-      bool isBulkyPeer = isNameBulky(peerName);
-      bool isGillPeer = isNameThegill(peerName);
-      if(isBulkyPeer){
-        pairedIsBulky = true;
-        pairedIsThegill = false;
-        botMotionState = STOP;
-        botSpeed = 0;
-        bulkyCommand = BulkyCommand{0, 0, STOP, {0, 0, 0}};
-      } else if(isGillPeer){
-        pairedIsThegill = true;
-        pairedIsBulky = false;
-        resetThegillState();
-      } else {
-        pairedIsBulky = false;
-        pairedIsThegill = false;
+      ModuleState* module = findModuleByName(peerName);
+      setActiveModule(module);
+      switch(module->descriptor->kind){
+        case PeerKind::Bulky:
+          botMotionState = STOP;
+          botSpeed = 0;
+          bulkyCommand = BulkyCommand{0, 0, STOP, {0, 0, 0}};
+          bulkyHonkLatch = false;
+          bulkyLightLatch = false;
+          bulkySlowMode = false;
+          break;
+        case PeerKind::Thegill:
+          resetThegillState();
+          gillHonkLatch = false;
+          gillConfigIndex = 0;
+          break;
+        case PeerKind::Generic:
+        default:
+          break;
       }
     }
+    audioFeedback(AudioCue::PeerDiscovered);
     return;
   }
 
   // Copy telemetry data from the incoming packet. The drone is expected to
   // send a TelemetryPacket structure defined above.
-  if(pairedIsThegill){
-    lastReceiveTime = millis();
-    connected = true;
-    return;
+  ModuleState* active = getActiveModule();
+  if(active == nullptr){
+    active = getModuleState(0);
   }
-  if(pairedIsBulky){
-    size_t copySize = static_cast<size_t>(len);
-    if(copySize > sizeof(reception)){
-      copySize = sizeof(reception);
+  if(active && active->descriptor){
+    if(active->descriptor->handleIncoming){
+      active->descriptor->handleIncoming(*active, incomingData, static_cast<size_t>(len));
+    } else {
+      handleGenericIncoming(*active, incomingData, static_cast<size_t>(len));
     }
-    memcpy(&reception, incomingData, copySize);
-    lastReceiveTime = millis();
-    connected = true;
-    return;
   }
-  memcpy(&telemetry, incomingData, sizeof(telemetry));
   lastReceiveTime = millis();
   connected = true;
 
@@ -337,10 +345,16 @@ static void updateDroneControl(){
 
   int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
   if (abs(roll) < 10) roll = 0; // eliminate small deadzone around center
+  if(dronePrecisionMode){
+    roll /= 2;
+  }
   emission.rollAngle = roll;
 
   int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
   if (abs(pitch) < 10) pitch = 0;
+  if(dronePrecisionMode){
+    pitch /= 2;
+  }
   emission.pitchAngle = pitch;
   emission.arm_motors = btnmode;
 }
@@ -355,7 +369,7 @@ static void updateThegillControl(){
   lastUpdate = now;
 
   bool brakePressed = digitalRead(joystickBtnA) == LOW;
-  bool honkPressed = digitalRead(joystickBtnB) == LOW;
+  bool honkPressed = (digitalRead(joystickBtnB) == LOW) || gillHonkLatch;
   thegillRuntime.brakeActive = brakePressed;
   thegillRuntime.honkActive = honkPressed;
 
@@ -441,8 +455,7 @@ static void updateThegillControl(){
 
   static bool lastHonk = false;
   if(honkPressed && !lastHonk){
-    isbeeping = 1;
-    beepMillis = now;
+    audioFeedback(AudioCue::Select);
   }
   lastHonk = honkPressed;
 }
@@ -451,10 +464,13 @@ static void updateBulkyControl(){
   processJoyStickA(analogRead(joystickA_Y), analogRead(joystickA_X));
   bulkyCommand.replyIndex = 0;
   bulkyCommand.motionState = botMotionState;
+  if(bulkySlowMode){
+    botSpeed = botSpeed / 2;
+  }
   bulkyCommand.speed = botSpeed;
-  bulkyCommand.buttonStates[0] = digitalRead(button1) == LOW ? 1 : 0;
-  bulkyCommand.buttonStates[1] = digitalRead(button2) == LOW ? 1 : 0;
-  bulkyCommand.buttonStates[2] = digitalRead(button3) == LOW ? 1 : 0;
+  bulkyCommand.buttonStates[0] = bulkyHonkLatch ? 1 : 0;
+  bulkyCommand.buttonStates[1] = bulkyLightLatch ? 1 : 0;
+  bulkyCommand.buttonStates[2] = bulkySlowMode ? 1 : 0;
 }
 
 // void packData(byte index)
@@ -494,6 +510,302 @@ static void updateBulkyControl(){
 //   }
 // }
 
+static const uint8_t* prepareGenericPayload(size_t& size){
+  size = sizeof(emission);
+  return reinterpret_cast<const uint8_t*>(&emission);
+}
+
+static const uint8_t* prepareBulkyPayload(size_t& size){
+  size = sizeof(bulkyCommand);
+  return reinterpret_cast<const uint8_t*>(&bulkyCommand);
+}
+
+static const uint8_t* prepareThegillPayload(size_t& size){
+  size = sizeof(thegillCommand);
+  return reinterpret_cast<const uint8_t*>(&thegillCommand);
+}
+
+static void handleGenericIncoming(ModuleState& state, const uint8_t* data, size_t length){
+  (void)state;
+  size_t copySize = length;
+  if(copySize > sizeof(telemetry)){
+    copySize = sizeof(telemetry);
+  }
+  memcpy(&telemetry, data, copySize);
+  if(copySize < sizeof(telemetry)){
+    uint8_t* dest = reinterpret_cast<uint8_t*>(&telemetry);
+    memset(dest + copySize, 0, sizeof(telemetry) - copySize);
+  }
+}
+
+static void handleBulkyIncoming(ModuleState& state, const uint8_t* data, size_t length){
+  (void)state;
+  size_t copySize = length;
+  if(copySize > sizeof(reception)){
+    copySize = sizeof(reception);
+  }
+  memcpy(&reception, data, copySize);
+  if(copySize < sizeof(reception)){
+    uint8_t* dest = reinterpret_cast<uint8_t*>(&reception);
+    memset(dest + copySize, 0, sizeof(reception) - copySize);
+  }
+  processComsData(0);
+}
+
+static void handleGillIncoming(ModuleState& state, const uint8_t* data, size_t length){
+  (void)state;
+  (void)data;
+  (void)length;
+}
+
+static void actionToggleArm(ModuleState& state, size_t slot);
+static void actionZeroYaw(ModuleState& state, size_t slot);
+static void actionTogglePrecision(ModuleState& state, size_t slot);
+static void actionToggleBulkyHonk(ModuleState& state, size_t slot);
+static void actionToggleBulkyLight(ModuleState& state, size_t slot);
+static void actionToggleBulkySlow(ModuleState& state, size_t slot);
+static void actionToggleGillMode(ModuleState& state, size_t slot);
+static void actionCycleGillEasing(ModuleState& state, size_t slot);
+static void actionToggleGillHonk(ModuleState& state, size_t slot);
+
+static const FunctionActionOption kGenericOptions[] = {
+  {"Toggle Arm", "ARM", actionToggleArm},
+  {"Zero Yaw", "ZERO", actionZeroYaw},
+  {"Precision Mode", "PREC", actionTogglePrecision}
+};
+
+static const FunctionActionOption kBulkyOptions[] = {
+  {"Honk Toggle", "HNK", actionToggleBulkyHonk},
+  {"Light Toggle", "LITE", actionToggleBulkyLight},
+  {"Slow Mode", "SLOW", actionToggleBulkySlow}
+};
+
+static const FunctionActionOption kGillOptions[] = {
+  {"Control Mode", "MODE", actionToggleGillMode},
+  {"Cycle Easing", "EASE", actionCycleGillEasing},
+  {"Honk Latch", "HNK", actionToggleGillHonk}
+};
+
+static const ModuleDescriptor kGenericDescriptor{
+  PeerKind::Generic,
+  "DroneGaze",
+  drawGenericDashboard,
+  drawGenericLayoutCard,
+  handleGenericIncoming,
+  updateDroneControl,
+  prepareGenericPayload,
+  kGenericOptions,
+  sizeof(kGenericOptions) / sizeof(kGenericOptions[0])
+};
+
+static const ModuleDescriptor kBulkyDescriptor{
+  PeerKind::Bulky,
+  "Bulky",
+  drawBulkyDashboard,
+  drawBulkyLayoutCard,
+  handleBulkyIncoming,
+  updateBulkyControl,
+  prepareBulkyPayload,
+  kBulkyOptions,
+  sizeof(kBulkyOptions) / sizeof(kBulkyOptions[0])
+};
+
+static const ModuleDescriptor kGillDescriptor{
+  PeerKind::Thegill,
+  "The'gill",
+  drawThegillDashboard,
+  drawThegillLayoutCard,
+  handleGillIncoming,
+  updateThegillControl,
+  prepareThegillPayload,
+  kGillOptions,
+  sizeof(kGillOptions) / sizeof(kGillOptions[0])
+};
+
+static ModuleState moduleStates[] = {
+  {&kGenericDescriptor, true, {0, 1, 2}, {false, false, false}},
+  {&kBulkyDescriptor, true, {0, 1, 2}, {false, false, false}},
+  {&kGillDescriptor, true, {0, 1, 2}, {false, false, false}}
+};
+
+static ModuleState* activeModule = &moduleStates[0];
+
+static void initializeModuleAssignments(){
+  size_t count = getModuleStateCount();
+  for(size_t i = 0; i < count; ++i){
+    ModuleState& state = moduleStates[i];
+    size_t optionCount = state.descriptor->functionOptionCount;
+    for(size_t slot = 0; slot < 3; ++slot){
+      if(optionCount == 0){
+        state.assignedActions[slot] = 0;
+      } else {
+        state.assignedActions[slot] = slot % optionCount;
+      }
+      state.functionOutputs[slot] = false;
+    }
+    state.wifiEnabled = true;
+  }
+}
+
+size_t getModuleStateCount(){
+  return sizeof(moduleStates) / sizeof(moduleStates[0]);
+}
+
+ModuleState* getModuleState(size_t index){
+  if(index >= getModuleStateCount()) return nullptr;
+  return &moduleStates[index];
+}
+
+ModuleState* findModuleByKind(PeerKind kind){
+  size_t count = getModuleStateCount();
+  for(size_t i = 0; i < count; ++i){
+    if(moduleStates[i].descriptor->kind == kind){
+      return &moduleStates[i];
+    }
+  }
+  return &moduleStates[0];
+}
+
+ModuleState* findModuleByName(const char* name){
+  if(name == nullptr){
+    return findModuleByKind(PeerKind::Generic);
+  }
+  if(isNameBulky(name)){
+    return findModuleByKind(PeerKind::Bulky);
+  }
+  if(isNameThegill(name)){
+    return findModuleByKind(PeerKind::Thegill);
+  }
+  return findModuleByKind(PeerKind::Generic);
+}
+
+ModuleState* getActiveModule(){
+  return activeModule;
+}
+
+void setActiveModule(ModuleState* state){
+  if(state){
+    activeModule = state;
+    functionButtonLatch[0] = functionButtonLatch[1] = functionButtonLatch[2] = false;
+    dashboardFocusIndex = 0;
+  }
+}
+
+const FunctionActionOption* getAssignedAction(const ModuleState& state, size_t slot){
+  if(slot >= 3) return nullptr;
+  size_t count = state.descriptor->functionOptionCount;
+  if(count == 0) return nullptr;
+  uint8_t index = state.assignedActions[slot] % count;
+  return &state.descriptor->functionOptions[index];
+}
+
+void cycleAssignedAction(ModuleState& state, size_t slot, int delta){
+  if(slot >= 3) return;
+  size_t count = state.descriptor->functionOptionCount;
+  if(count == 0) return;
+  int current = state.assignedActions[slot] % static_cast<int>(count);
+  current = (current + delta) % static_cast<int>(count);
+  if(current < 0) current += static_cast<int>(count);
+  state.assignedActions[slot] = static_cast<uint8_t>(current);
+  setFunctionOutput(state, slot, false);
+}
+
+void setFunctionOutput(ModuleState& state, size_t slot, bool active){
+  if(slot >= 3) return;
+  state.functionOutputs[slot] = active;
+}
+
+bool getFunctionOutput(const ModuleState& state, size_t slot){
+  if(slot >= 3) return false;
+  return state.functionOutputs[slot];
+}
+
+void toggleModuleWifi(ModuleState& state){
+  state.wifiEnabled = !state.wifiEnabled;
+  audioFeedback(state.wifiEnabled ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionToggleArm(ModuleState& state, size_t slot){
+  bool next = !getFunctionOutput(state, slot);
+  setFunctionOutput(state, slot, next);
+  btnmode = next;
+  audioFeedback(next ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionZeroYaw(ModuleState& state, size_t slot){
+  yawCommand = 0;
+  setFunctionOutput(state, slot, false);
+  audioFeedback(AudioCue::Select);
+}
+
+static void actionTogglePrecision(ModuleState& state, size_t slot){
+  dronePrecisionMode = !dronePrecisionMode;
+  setFunctionOutput(state, slot, dronePrecisionMode);
+  audioFeedback(dronePrecisionMode ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionToggleBulkyHonk(ModuleState& state, size_t slot){
+  bulkyHonkLatch = !bulkyHonkLatch;
+  setFunctionOutput(state, slot, bulkyHonkLatch);
+  audioFeedback(bulkyHonkLatch ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionToggleBulkyLight(ModuleState& state, size_t slot){
+  bulkyLightLatch = !bulkyLightLatch;
+  setFunctionOutput(state, slot, bulkyLightLatch);
+  audioFeedback(bulkyLightLatch ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionToggleBulkySlow(ModuleState& state, size_t slot){
+  bulkySlowMode = !bulkySlowMode;
+  setFunctionOutput(state, slot, bulkySlowMode);
+  audioFeedback(bulkySlowMode ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionToggleGillMode(ModuleState& state, size_t slot){
+  if(thegillConfig.mode == GillMode::Default){
+    thegillConfig.mode = GillMode::Differential;
+  } else {
+    thegillConfig.mode = GillMode::Default;
+  }
+  resetThegillState();
+  setFunctionOutput(state, slot, thegillConfig.mode == GillMode::Differential);
+  audioFeedback(thegillConfig.mode == GillMode::Differential ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionCycleGillEasing(ModuleState& state, size_t slot){
+  (void)state;
+  (void)slot;
+  int next = (static_cast<int>(thegillConfig.easing) + 1) % 5;
+  thegillConfig.easing = static_cast<GillEasing>(next);
+  thegillCommand.easing = thegillConfig.easing;
+  audioFeedback(AudioCue::Scroll);
+}
+
+static void actionToggleGillHonk(ModuleState& state, size_t slot){
+  gillHonkLatch = !gillHonkLatch;
+  setFunctionOutput(state, slot, gillHonkLatch);
+  audioFeedback(gillHonkLatch ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void processFunctionKeys(){
+  ModuleState* active = getActiveModule();
+  if(!active) return;
+  const uint8_t pins[3] = {button1, button2, button3};
+  for(size_t slot = 0; slot < 3; ++slot){
+    bool pressed = digitalRead(pins[slot]) == LOW;
+    if(pressed && !functionButtonLatch[slot]){
+      functionButtonLatch[slot] = true;
+      const FunctionActionOption* action = getAssignedAction(*active, slot);
+      if(action && action->invoke){
+        action->invoke(*active, slot);
+      }
+    } else if(!pressed){
+      functionButtonLatch[slot] = false;
+    }
+  }
+}
+
 //Peripheral Functions
 // void readJoystick()
 // {
@@ -523,6 +835,7 @@ void displayTask(void* pvParameters){
       case 5: drawDashboard(); break;
       case 6: drawAbout(); break;
       case 7: drawPeerInfo(); break;
+      case 8: drawGlobalMenu(); break;
     }
     appendPidSample();
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -532,22 +845,23 @@ void displayTask(void* pvParameters){
 void commTask(void* pvParameters){
   const TickType_t delay = 10 / portTICK_PERIOD_MS; // 50Hz
   for(;;){
-    const uint8_t* payload;
-    size_t payloadSize;
-    if(pairedIsThegill){
-      payload = reinterpret_cast<const uint8_t*>(&thegillCommand);
-      payloadSize = sizeof(thegillCommand);
-    } else if(pairedIsBulky){
-      payload = reinterpret_cast<const uint8_t*>(&bulkyCommand);
-      payloadSize = sizeof(bulkyCommand);
-    } else {
-      payload = reinterpret_cast<const uint8_t*>(&emission);
-      payloadSize = sizeof(emission);
+    const uint8_t* payload = nullptr;
+    size_t payloadSize = 0;
+    ModuleState* active = getActiveModule();
+    if(active && active->wifiEnabled){
+      if(active->descriptor->updateControl){
+        active->descriptor->updateControl();
+      }
+      if(active->descriptor->preparePayload){
+        payload = active->descriptor->preparePayload(payloadSize);
+      }
     }
-    if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
-      sent_Status = true;
-    }else{
-      sent_Status = false;
+    if(payload && payloadSize > 0){
+      if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
+        sent_Status = true;
+      }else{
+        sent_Status = false;
+      }
     }
     vTaskDelay(delay);
   }
@@ -556,9 +870,10 @@ void commTask(void* pvParameters){
 void setup() {
 
   //Pin directions ===================
-  pinMode(buzzer_Pin,OUTPUT);
   initInput();
   //==================================
+
+  initializeModuleAssignments();
 
   //Init Verbose =====================
   verboseON
@@ -640,28 +955,8 @@ void setup() {
   //==================================
 
   //DAC inits ========================
-  buzzer.enable();
-  ledcWrite(0,4096);
-  // buzzer.setCwScale(DAC_CW_SCALE_1); //3.3 volts amplitude output
-  // buzzer.outputCW(440); //Buzz a bit to assert dominance.
-  // delay(500);
-   ledcWrite(0,1600);
-  // buzzer.outputCW(390); //Buzz a bit to assert dominance.
-  // delay(600);
-   ledcWrite(0,500);
-  // buzzer.outputCW(1750); //Buzz a bit to assert dominance.
-  // delay(50);
-
-  buzzer.outputCW(300);
-  delay(100);
-  buzzer.outputCW(600);
-  delay(200);
-  buzzer.outputCW(720);
-  delay(300);
-  buzzer.outputCW(0);
-
-  buzzer.disable();
-  ledcWrite(0,0);
+  audioSetup();
+  audioPlayStartup();
   oled.clearBuffer();
 
   //side note about playing the tones as we've designed them, use pointers for efficiency. 
@@ -671,21 +966,6 @@ void setup() {
 
 }
 
-void beep()
-{
-  if(isbeeping==1){
-  buzzer.enable();
-  buzzer.outputCW(400);
-  if(millis()-beepMillis>=200)
-  {
-    isbeeping=0;
-  }
-  }else
-  {
-    buzzer.disable();
-  }
-}
-
 unsigned long lastBtnModeMillis;
 bool ispressed;
 
@@ -693,231 +973,220 @@ void loop() {
   uint32_t now = millis();
   static uint32_t lastPairMaintenance = 0;
   if(now - lastPairMaintenance >= 200){
-    discovery.discover();
-    lastPairMaintenance = now;
+  discovery.discover();
+  lastPairMaintenance = now;
   }
   ArduinoOTA.handle();
   checkPress();
-  beep();
+  audioUpdate();
+  processFunctionKeys();
 
-  //Send Data Through the Air
+  ModuleState* active = getActiveModule();
+  PeerKind kind = active ? active->descriptor->kind : PeerKind::Generic;
 
-  if(pairedIsBulky){
-    updateBulkyControl();
-    processComsData(0);
-  }
-
-  if(connected && millis() - lastReceiveTime > 3000){
+  if(connected && now - lastReceiveTime > 3000){
     connected = false;
+    discovery.discover();
+    lastDiscoveryTime = now;
     displayMode = 4;
     selectedPeer = 0;
-    discovery.discover();
-    lastDiscoveryTime = millis();
-    pairedIsBulky = false;
-    pairedIsThegill = false;
     botMotionState = STOP;
     botSpeed = 0;
-    bulkyCommand = BulkyCommand{0, 0, 0, {0, 0, 0}};
-    resetThegillState();
+    if(kind == PeerKind::Thegill){
+      resetThegillState();
+    }
   }
 
-  if(!pairedIsThegill && millis()-lastBtnModeMillis >= 200)
-  {
+  if(kind != PeerKind::Thegill && now - lastBtnModeMillis >= 200){
     if(!ispressed){
-    if(!digitalRead(joystickBtnA))
-    {
-      btnmode=!btnmode;
-      isbeeping=1;
-      ispressed=1;
-    }}else{
-      if(digitalRead(joystickBtnA))
-      {
-        ispressed=0;
+      if(digitalRead(joystickBtnA) == LOW){
+        btnmode = !btnmode;
+        audioFeedback(btnmode ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+        ispressed = true;
       }
+    } else if(digitalRead(joystickBtnA) == HIGH){
+      ispressed = false;
     }
-    lastBtnModeMillis=millis();
+    lastBtnModeMillis = now;
   }
 
-  if(!digitalRead(encoderBtn))
-  {
-    ledcWrite(0,4050);
-  }else
-  {
-    ledcWrite(0,0);
-  }
-
-  // Automatic discovery while in the pairing menu.
-  if(displayMode == 4 && millis() - lastDiscoveryTime > 2000){
+  if(displayMode == 4 && now - lastDiscoveryTime > 2000){
     discovery.discover();
-    lastDiscoveryTime = millis();
+    lastDiscoveryTime = now;
   }
 
-  // Handle encoder rotation depending on the current page.
+  int delta = encoderCount - lastEncoderCount;
   if(displayMode == 0){
-    int delta = encoderCount - lastEncoderCount;
-    int menuCount = 6;
-    if(delta != 0){
-      homeMenuIndex = (homeMenuIndex + delta) % menuCount;
-      if(homeMenuIndex < 0) homeMenuIndex += menuCount;
+    size_t moduleCount = getModuleStateCount();
+    if(delta != 0 && moduleCount > 0){
+      homeMenuIndex = (homeMenuIndex + delta) % static_cast<int>(moduleCount);
+      if(homeMenuIndex < 0) homeMenuIndex += static_cast<int>(moduleCount);
       lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
     }
-  } else if(displayMode == 1 && pairedIsThegill){
-    int delta = encoderCount - lastEncoderCount;
+  } else if(displayMode == 1 && kind == PeerKind::Thegill){
     if(delta != 0){
       gillConfigIndex = (gillConfigIndex + delta) % 3;
       if(gillConfigIndex < 0) gillConfigIndex += 3;
       lastEncoderCount = encoderCount;
-    }
-  } else if(displayMode == 4){
-    int delta = encoderCount - lastEncoderCount;
-    int count = discovery.getPeerCount() + 1; // include Home option
-    if(delta != 0 && count > 0){
-      selectedPeer = (selectedPeer + delta) % count;
-      if(selectedPeer < 0) selectedPeer += count;
-      lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
     }
   } else if(displayMode == 2){
-    int delta = encoderCount - lastEncoderCount;
     if(delta != 0){
       pidGraphIndex = (pidGraphIndex + delta) % 3;
       if(pidGraphIndex < 0) pidGraphIndex += 3;
       lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
+    }
+  } else if(displayMode == 4){
+    int count = discovery.getPeerCount() + 1;
+    if(delta != 0 && count > 0){
+      selectedPeer = (selectedPeer + delta) % count;
+      if(selectedPeer < 0) selectedPeer += count;
+      lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
     }
   } else if(displayMode == 5){
-    // no rotary action on dashboard
-  } else {
-    int delta = encoderCount - lastEncoderCount;
+    if(delta != 0){
+      dashboardFocusIndex = (dashboardFocusIndex + delta) % 3;
+      if(dashboardFocusIndex < 0) dashboardFocusIndex += 3;
+      lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
+    }
+  } else if(displayMode == 8){
+    const int baseCount = 6;
+    const int totalEntries = baseCount + 3 + 1 + 1;
+    if(delta != 0){
+      globalMenuIndex = (globalMenuIndex + delta) % totalEntries;
+      if(globalMenuIndex < 0) globalMenuIndex += totalEntries;
+      lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
+    }
+  } else if(displayMode == 3 || displayMode == 6 || displayMode == 7){
     if(delta != 0){
       homeSelected = !homeSelected;
       lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
     }
+  } else if(delta != 0){
+    lastEncoderCount = encoderCount;
+    audioFeedback(AudioCue::Scroll);
   }
 
-  // Handle encoder button presses for navigation.
   if(encoderBtnState){
     encoderBtnState = 0;
     if(displayMode == 5){
-      displayMode = 0;
-      homeMenuIndex = 0;
-      homeSelected = false;
-      lastEncoderCount = encoderCount;
-    } else if(displayMode == 0){
-      switch(homeMenuIndex){
-        case 0: displayMode = 5; break; // Dashboard
-        case 1: displayMode = 1; gillConfigIndex = 0; break; // Telemetry / Config
-        case 2: displayMode = 2; break; // PID Graph
-        case 3: displayMode = 3; break; // Orientation
-        case 4: displayMode = 4; selectedPeer = 0; break; // Pairing
-        case 5: displayMode = 6; break; // About
+      if(dashboardFocusIndex == 1){
+        displayMode = 8;
+        globalMenuIndex = 0;
+        audioFeedback(AudioCue::Select);
+      } else if(dashboardFocusIndex == 2){
+        if(active){
+          toggleModuleWifi(*active);
+        }
+      } else {
+        displayMode = 0;
+        homeMenuIndex = 0;
+        audioFeedback(AudioCue::Back);
       }
-      lastEncoderCount = encoderCount;
-      homeSelected = false;
+    } else if(displayMode == 0){
+      ModuleState* selected = getModuleState(static_cast<size_t>(homeMenuIndex));
+      if(selected){
+        setActiveModule(selected);
+        displayMode = 5;
+        dashboardFocusIndex = 0;
+        audioFeedback(AudioCue::Select);
+      }
     } else if(displayMode == 4){
       int count = discovery.getPeerCount();
       if(selectedPeer == count){
         displayMode = 0;
-        homeMenuIndex = 0;
-        homeSelected = false;
-        lastEncoderCount = encoderCount;
+        audioFeedback(AudioCue::Back);
       } else if(count > 0){
         infoPeer = selectedPeer;
         displayMode = 7;
-        homeSelected = false;
-        lastEncoderCount = encoderCount;
+        audioFeedback(AudioCue::Select);
       }
-    } else if(displayMode == 1 && pairedIsThegill){
-      if(gillConfigIndex == 0){
-        thegillConfig.mode = (thegillConfig.mode == GillMode::Default) ? GillMode::Differential : GillMode::Default;
-        resetThegillState();
-      } else if(gillConfigIndex == 1){
-        int next = (static_cast<int>(thegillConfig.easing) + 1) % 5;
-        thegillConfig.easing = static_cast<GillEasing>(next);
-        thegillCommand.easing = thegillConfig.easing;
-      } else {
-        displayMode = 0;
-        homeMenuIndex = 1;
-        homeSelected = false;
+    } else if(displayMode == 1 && kind == PeerKind::Thegill){
+      if(active){
+        if(gillConfigIndex == 0){
+          actionToggleGillMode(*active, 0);
+        } else if(gillConfigIndex == 1){
+          actionCycleGillEasing(*active, 1);
+        } else {
+          displayMode = 0;
+          homeMenuIndex = 1;
+          audioFeedback(AudioCue::Back);
+        }
       }
-      lastEncoderCount = encoderCount;
     } else if(displayMode == 7){
       if(homeSelected){
         displayMode = 4;
         homeSelected = false;
-      }else{
+        audioFeedback(AudioCue::Back);
+      } else {
         const uint8_t *mac = discovery.getPeer(infoPeer);
-        memcpy(targetAddress, mac, 6);
+        if(mac){
+          memcpy(targetAddress, mac, 6);
+        }
         const char* peerName = discovery.getPeerName(infoPeer);
-        pairedIsBulky = strcmp(peerName, "Bulky") == 0;
-        pairedIsThegill = isNameThegill(peerName);
-        if(pairedIsBulky){
+        ModuleState* module = findModuleByName(peerName);
+        setActiveModule(module);
+        if(module->descriptor->kind == PeerKind::Bulky){
           botMotionState = STOP;
           botSpeed = 0;
-          bulkyCommand = BulkyCommand{0, 0, STOP, {0, 0, 0}};
-        } else {
-          bulkyCommand = BulkyCommand{0, 0, 0, {0, 0, 0}};
-        }
-        if(pairedIsThegill){
+        } else if(module->descriptor->kind == PeerKind::Thegill){
           resetThegillState();
           gillConfigIndex = 0;
         }
         displayMode = 5;
-        homeSelected = false;
+        dashboardFocusIndex = 0;
+        audioFeedback(AudioCue::Select);
       }
-      lastEncoderCount = encoderCount;
     } else if(displayMode == 2){
       displayMode = 0;
       homeMenuIndex = 2;
-      lastEncoderCount = encoderCount;
-    } else {
+      audioFeedback(AudioCue::Back);
+    } else if(displayMode == 3 || displayMode == 6){
       if(homeSelected){
         displayMode = 0;
         homeMenuIndex = 0;
         homeSelected = false;
-        lastEncoderCount = encoderCount;
+        audioFeedback(AudioCue::Back);
+      }
+    } else if(displayMode == 8){
+      const int baseCount = 6;
+      const int wifiEntryIndex = baseCount + 3;
+      if(globalMenuIndex < baseCount){
+        switch(globalMenuIndex){
+          case 0: displayMode = 5; break;
+          case 1: displayMode = 1; gillConfigIndex = 0; break;
+          case 2: displayMode = 2; break;
+          case 3: displayMode = 3; break;
+          case 4: displayMode = 4; break;
+          case 5: displayMode = 6; break;
+        }
+        if(displayMode == 4){
+          selectedPeer = 0;
+        }
+        homeSelected = false;
+        audioFeedback(AudioCue::Select);
+      } else if(globalMenuIndex < wifiEntryIndex){
+        if(active){
+          size_t slot = static_cast<size_t>(globalMenuIndex - baseCount);
+          cycleAssignedAction(*active, slot, 1);
+          audioFeedback(AudioCue::Scroll);
+        }
+      } else if(globalMenuIndex == wifiEntryIndex){
+        if(active){
+          toggleModuleWifi(*active);
+        }
+      } else {
+        displayMode = 5;
+        audioFeedback(AudioCue::Back);
       }
     }
-    isbeeping = 1; // audible feedback
-  }
-
-  if(!pairedIsBulky){
-    // Populate packet with desired control values.  Smooth the potentiometer
-    // used for throttle offset and map its full travel to 0–500 units.
-    static uint16_t potFiltered = analogRead(potA);
-    potFiltered = (potFiltered * 3 + analogRead(potA)) / 4; // IIR filter
-    uint16_t potOffset = map(potFiltered, 0, 4095, 0, 800);
-    potOffset = constrain(potOffset, 0, 800);
-
-    emission.throttle = constrain(
-        map(analogRead(joystickA_Y), 0, 4095, 2000, -1000) + potOffset,
-        1000,
-        2000);
-
-    // if (rawThrottle <= 2048) {
-    //   emission.throttle = 1000;
-    // } else {
-    //   emission.throttle = map(rawThrottle, 2048, 4095, 1000, 2000);
-    // }
-
-    // Yaw is controlled incrementally: joystick deflection adjusts the
-    // accumulated yaw command rather than setting an absolute angle.
-    int16_t yawDelta = map(analogRead(joystickA_X),0,4096,-10,10);
-    if (abs(yawDelta) < 2) yawDelta = 0; // small deadband to prevent drift
-    yawCommand = constrain(yawCommand + yawDelta, -180, 180);
-    emission.yawAngle = yawCommand;
-
-    int16_t roll = map(analogRead(joystickB_X), 0, 4095, -90, 90);
-    if (abs(roll) < 12) roll = 0; // eliminate small deadzone around center
-    emission.rollAngle = roll;
-
-    int16_t pitch = map(analogRead(joystickB_Y), 0, 4095, -90, 90);
-    if (abs(pitch) < 12) pitch = 0;
-    emission.pitchAngle = pitch;
-    emission.arm_motors = btnmode;
-    if(pairedIsThegill){
-      updateThegillControl();
-    } else {
-      updateDroneControl();
-    }
+    lastEncoderCount = encoderCount;
   }
 
   // Display rendering handled in FreeRTOS display task

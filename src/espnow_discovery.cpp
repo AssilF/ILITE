@@ -1,4 +1,5 @@
 #include "espnow_discovery.h"
+#include "audio_feedback.h"
 
 #include <cstdio>
 #include <cstring>
@@ -128,6 +129,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
             upsertPeer(packet->id, mac, now);
             ensurePeer(mac);
             sendPacket(MessageType::MSG_IDENTITY_REPLY, mac);
+            audioFeedback(AudioCue::PeerRequest);
             return true;
 #else
             return false;
@@ -138,6 +140,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
             Serial.println("[ESP-NOW] Identity reply received");
             upsertPeer(packet->id, mac, now);
             ensurePeer(mac);
+            audioFeedback(AudioCue::PeerDiscovered);
             return true;
 #else
             return false;
@@ -157,6 +160,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                 sendPacket(MessageType::MSG_PAIR_ACK, mac);
                 peers[index].acked = true;
                 Serial.println("[ESP-NOW] Paired with controller");
+                audioFeedback(AudioCue::PeerAcknowledge);
             }
             return true;
 #else
@@ -177,6 +181,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                     peers[index].lastSeen = now;
                     peerCount = computePeerCount();
                 }
+                audioFeedback(AudioCue::PeerAcknowledge);
                 return true;
             }
             return false;
