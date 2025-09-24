@@ -525,7 +525,8 @@ void drawGlobalMenu(){
   };
   const int baseCount = sizeof(baseItems) / sizeof(baseItems[0]);
   const int functionEntryOffset = baseCount;
-  const int wifiEntryIndex = functionEntryOffset + 3;
+  const int functionEntryCount = static_cast<int>(kMaxFunctionSlots);
+  const int wifiEntryIndex = functionEntryOffset + functionEntryCount;
   const int backEntryIndex = wifiEntryIndex + 1;
   const int totalCount = backEntryIndex + 1;
 
@@ -829,29 +830,65 @@ static void drawDashboardOverlays(){
     oled.drawCircle(dotX, dotY, 2);
   }
 
-  // Function key bar at bottom
-  const int16_t slotWidth = screen_Width / 3;
-  for(size_t slot = 0; slot < 3; ++slot){
+  // Reserve space for function bar and hardware button strip
+  const int16_t statusStripHeight = 3;
+  const int16_t functionBarHeight = 9;
+  const int16_t barY = screen_Height - statusStripHeight - functionBarHeight;
+  oled.setDrawColor(0);
+  oled.drawBox(0, barY, screen_Width, functionBarHeight + statusStripHeight);
+  oled.setDrawColor(1);
+
+  const int16_t slotWidth = screen_Width / static_cast<int16_t>(kMaxFunctionSlots);
+  for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
     const FunctionActionOption* action = getAssignedAction(*active, slot);
     const char* label = action ? action->shortLabel : "---";
     bool activeState = getFunctionOutput(*active, slot);
-    int16_t x = slot * slotWidth;
-    int16_t width = (slot == 2) ? screen_Width - x : slotWidth;
+    bool focused = dashboardFocusIndex == static_cast<int>(slot) + 3;
+    int16_t x = static_cast<int16_t>(slot * slotWidth);
+    int16_t width = (slot == kMaxFunctionSlots - 1) ? screen_Width - x : slotWidth;
+    int16_t outerWidth = width - 1;
+    if(focused){
+      oled.drawRFrame(x, barY, outerWidth, functionBarHeight, 2);
+    } else {
+      oled.drawFrame(x, barY, outerWidth, functionBarHeight);
+    }
+
+    int16_t innerX = x + 2;
+    int16_t innerY = barY + 2;
+    int16_t innerWidth = outerWidth - 3;
+    int16_t innerHeight = functionBarHeight - 4;
+    if(innerWidth < 2) innerWidth = 2;
+    if(innerHeight < 2) innerHeight = 2;
+
     if(activeState){
-      oled.setDrawColor(1);
-      oled.drawBox(x, screen_Height - 11, width - 1, 11);
+      oled.drawBox(innerX, innerY, innerWidth, innerHeight);
       oled.setDrawColor(0);
     } else {
-      oled.setDrawColor(1);
-      oled.drawFrame(x, screen_Height - 11, width - 1, 11);
+      oled.drawFrame(innerX, innerY, innerWidth, innerHeight);
     }
+
     oled.setFont(smallFont);
     int16_t labelWidth = oled.getUTF8Width(label);
-    int16_t textX = x + (width - 1 - labelWidth) / 2;
-    if(textX < x + 1) textX = x + 1;
-    oled.setCursor(textX, screen_Height - 2);
+    int16_t textX = x + (outerWidth - labelWidth) / 2;
+    if(textX < x + 2) textX = x + 2;
+    int16_t textY = barY + functionBarHeight - 2;
+    oled.setCursor(textX, textY);
     oled.print(label);
     oled.setDrawColor(1);
+  }
+
+  // Hardware button state strip
+  const int16_t stripY = screen_Height - statusStripHeight;
+  const uint8_t buttonPins[kMaxFunctionSlots] = {button1, button2, button3};
+  for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
+    int16_t x = static_cast<int16_t>(slot * slotWidth);
+    int16_t width = (slot == kMaxFunctionSlots - 1) ? screen_Width - x : slotWidth;
+    int16_t outerWidth = width - 1;
+    oled.drawFrame(x, stripY, outerWidth, statusStripHeight);
+    bool pressed = digitalRead(buttonPins[slot]) == LOW;
+    if(pressed){
+      oled.drawBox(x + 1, stripY + 1, outerWidth - 2, statusStripHeight - 2);
+    }
   }
 }
 

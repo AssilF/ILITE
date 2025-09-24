@@ -98,7 +98,7 @@ static bool bulkyHonkLatch = false;
 static bool bulkyLightLatch = false;
 static bool bulkySlowMode = false;
 static bool gillHonkLatch = false;
-static bool functionButtonLatch[3] = {false, false, false};
+static bool functionButtonLatch[kMaxFunctionSlots] = {false, false, false};
 
 
 
@@ -642,7 +642,7 @@ static void initializeModuleAssignments(){
   for(size_t i = 0; i < count; ++i){
     ModuleState& state = moduleStates[i];
     size_t optionCount = state.descriptor->functionOptionCount;
-    for(size_t slot = 0; slot < 3; ++slot){
+    for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
       if(optionCount == 0){
         state.assignedActions[slot] = 0;
       } else {
@@ -693,13 +693,15 @@ ModuleState* getActiveModule(){
 void setActiveModule(ModuleState* state){
   if(state){
     activeModule = state;
-    functionButtonLatch[0] = functionButtonLatch[1] = functionButtonLatch[2] = false;
+    for(size_t i = 0; i < kMaxFunctionSlots; ++i){
+      functionButtonLatch[i] = false;
+    }
     dashboardFocusIndex = 0;
   }
 }
 
 const FunctionActionOption* getAssignedAction(const ModuleState& state, size_t slot){
-  if(slot >= 3) return nullptr;
+  if(slot >= kMaxFunctionSlots) return nullptr;
   size_t count = state.descriptor->functionOptionCount;
   if(count == 0) return nullptr;
   uint8_t index = state.assignedActions[slot] % count;
@@ -707,7 +709,7 @@ const FunctionActionOption* getAssignedAction(const ModuleState& state, size_t s
 }
 
 void cycleAssignedAction(ModuleState& state, size_t slot, int delta){
-  if(slot >= 3) return;
+  if(slot >= kMaxFunctionSlots) return;
   size_t count = state.descriptor->functionOptionCount;
   if(count == 0) return;
   int current = state.assignedActions[slot] % static_cast<int>(count);
@@ -718,12 +720,12 @@ void cycleAssignedAction(ModuleState& state, size_t slot, int delta){
 }
 
 void setFunctionOutput(ModuleState& state, size_t slot, bool active){
-  if(slot >= 3) return;
+  if(slot >= kMaxFunctionSlots) return;
   state.functionOutputs[slot] = active;
 }
 
 bool getFunctionOutput(const ModuleState& state, size_t slot){
-  if(slot >= 3) return false;
+  if(slot >= kMaxFunctionSlots) return false;
   return state.functionOutputs[slot];
 }
 
@@ -798,8 +800,8 @@ static void actionToggleGillHonk(ModuleState& state, size_t slot){
 static void processFunctionKeys(){
   ModuleState* active = getActiveModule();
   if(!active) return;
-  const uint8_t pins[3] = {button1, button2, button3};
-  for(size_t slot = 0; slot < 3; ++slot){
+  const uint8_t pins[kMaxFunctionSlots] = {button1, button2, button3};
+  for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
     bool pressed = digitalRead(pins[slot]) == LOW;
     if(pressed && !functionButtonLatch[slot]){
       functionButtonLatch[slot] = true;
@@ -1061,8 +1063,13 @@ void loop() {
     }
   } else if(displayMode == DISPLAY_MODE_DASHBOARD){
     if(delta != 0){
-      dashboardFocusIndex = (dashboardFocusIndex + delta) % 3;
-      if(dashboardFocusIndex < 0) dashboardFocusIndex += 3;
+      int focusCount = 3;
+      if(active){
+        focusCount += static_cast<int>(kMaxFunctionSlots);
+      }
+      if(focusCount <= 0) focusCount = 1;
+      dashboardFocusIndex = (dashboardFocusIndex + delta) % focusCount;
+      if(dashboardFocusIndex < 0) dashboardFocusIndex += focusCount;
       lastEncoderCount = encoderCount;
       audioFeedback(AudioCue::Scroll);
     }
@@ -1080,7 +1087,8 @@ void loop() {
     }
   } else if(displayMode == DISPLAY_MODE_GLOBAL_MENU){
     const int baseCount = 7;
-    const int totalEntries = baseCount + 3 + 1 + 1;
+    const int functionEntryCount = static_cast<int>(kMaxFunctionSlots);
+    const int totalEntries = baseCount + functionEntryCount + 1 + 1;
     if(delta != 0){
       globalMenuIndex = (globalMenuIndex + delta) % totalEntries;
       if(globalMenuIndex < 0) globalMenuIndex += totalEntries;
@@ -1101,7 +1109,11 @@ void loop() {
   if(encoderBtnState){
     encoderBtnState = 0;
     if(displayMode == DISPLAY_MODE_DASHBOARD){
-      if(dashboardFocusIndex == 1){
+      if(dashboardFocusIndex == 0){
+        displayMode = DISPLAY_MODE_HOME;
+        homeMenuIndex = 0;
+        audioFeedback(AudioCue::Back);
+      } else if(dashboardFocusIndex == 1){
         displayMode = DISPLAY_MODE_GLOBAL_MENU;
         globalMenuIndex = 0;
         audioFeedback(AudioCue::Select);
@@ -1109,10 +1121,14 @@ void loop() {
         if(active){
           toggleModuleWifi(*active);
         }
-      } else {
-        displayMode = DISPLAY_MODE_HOME;
-        homeMenuIndex = 0;
-        audioFeedback(AudioCue::Back);
+      } else if(active){
+        size_t slot = static_cast<size_t>(dashboardFocusIndex - 3);
+        if(slot < kMaxFunctionSlots){
+          const FunctionActionOption* action = getAssignedAction(*active, slot);
+          if(action && action->invoke){
+            action->invoke(*active, slot);
+          }
+        }
       }
     } else if(displayMode == DISPLAY_MODE_HOME){
       ModuleState* selected = getModuleState(static_cast<size_t>(homeMenuIndex));
@@ -1181,7 +1197,8 @@ void loop() {
       }
     } else if(displayMode == DISPLAY_MODE_GLOBAL_MENU){
       const int baseCount = 7;
-      const int wifiEntryIndex = baseCount + 3;
+      const int functionEntryCount = static_cast<int>(kMaxFunctionSlots);
+      const int wifiEntryIndex = baseCount + functionEntryCount;
       if(globalMenuIndex < baseCount){
         switch(globalMenuIndex){
           case 0: displayMode = DISPLAY_MODE_DASHBOARD; break;
