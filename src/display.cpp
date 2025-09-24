@@ -28,6 +28,139 @@ int globalMenuIndex = 0;
 int dashboardFocusIndex = 0;
 int logScrollOffset = 0;
 
+namespace {
+constexpr int kLogVisibleLines = 6;
+constexpr int16_t kLogStartY = 22;
+constexpr int16_t kLogLineHeight = 8;
+constexpr size_t kLogMaxCharsPerLine = 20;
+constexpr size_t kLogLineBufferSize = 64;
+
+size_t nextWrappedSegment(const char* text, size_t start, size_t totalLength,
+                          size_t* nextStart) {
+  if (!text || start >= totalLength) {
+    if (nextStart) {
+      *nextStart = totalLength;
+    }
+    return 0;
+  }
+  size_t remaining = totalLength - start;
+  size_t limit = remaining < kLogMaxCharsPerLine ? remaining : kLogMaxCharsPerLine;
+  size_t lineLen = limit;
+  if (remaining > kLogMaxCharsPerLine) {
+    size_t breakPos = start + limit;
+    bool foundSpace = false;
+    for (size_t i = 0; i < kLogMaxCharsPerLine; ++i) {
+      size_t pos = breakPos - 1 - i;
+      if (isspace(static_cast<unsigned char>(text[pos]))) {
+        lineLen = pos - start + 1;
+        foundSpace = true;
+        break;
+      }
+    }
+    if (!foundSpace) {
+      lineLen = limit;
+    }
+  }
+  size_t copyLen = lineLen;
+  while (copyLen > 0 && isspace(static_cast<unsigned char>(text[start + copyLen - 1]))) {
+    --copyLen;
+  }
+  size_t advance = lineLen > 0 ? lineLen : 1;
+  size_t newStart = start + advance;
+  while (newStart < totalLength && isspace(static_cast<unsigned char>(text[newStart]))) {
+    ++newStart;
+  }
+  if (nextStart) {
+    *nextStart = newStart;
+  }
+  return copyLen;
+}
+
+size_t countWrappedLines(const char* text) {
+  if (!text) {
+    return 0;
+  }
+  if (text[0] == '\0') {
+    return 1;
+  }
+  size_t totalLength = strlen(text);
+  size_t start = 0;
+  while (start < totalLength && isspace(static_cast<unsigned char>(text[start]))) {
+    ++start;
+  }
+  size_t count = 0;
+  while (start < totalLength) {
+    size_t nextStart = start;
+    size_t copyLen = nextWrappedSegment(text, start, totalLength, &nextStart);
+    ++count;
+    if (nextStart <= start) {
+      break;
+    }
+    start = nextStart;
+  }
+  return count > 0 ? count : 1;
+}
+
+bool extractWrappedLine(const char* text, size_t lineIndex, char* buffer, size_t bufferSize) {
+  if (!buffer || bufferSize == 0) {
+    return false;
+  }
+  buffer[0] = '\0';
+  if (!text) {
+    return false;
+  }
+  if (text[0] == '\0') {
+    return lineIndex == 0;
+  }
+  size_t totalLength = strlen(text);
+  size_t start = 0;
+  while (start < totalLength && isspace(static_cast<unsigned char>(text[start]))) {
+    ++start;
+  }
+  if (start >= totalLength) {
+    return lineIndex == 0;
+  }
+  size_t currentLine = 0;
+  while (start < totalLength) {
+    size_t nextStart = start;
+    size_t copyLen = nextWrappedSegment(text, start, totalLength, &nextStart);
+    if (currentLine == lineIndex) {
+      if (copyLen >= bufferSize) {
+        copyLen = bufferSize - 1;
+      }
+      memcpy(buffer, text + start, copyLen);
+      buffer[copyLen] = '\0';
+      return true;
+    }
+    ++currentLine;
+    if (nextStart <= start) {
+      break;
+    }
+    start = nextStart;
+  }
+  return false;
+}
+
+size_t getTotalWrappedLineCount() {
+  size_t total = 0;
+  size_t count = connectionLogGetCount();
+  for (size_t i = 0; i < count; ++i) {
+    const char* entry = connectionLogGetEntry(i);
+    total += countWrappedLines(entry);
+  }
+  return total;
+}
+
+}  // namespace
+
+int getLogMaxScrollOffset() {
+  size_t totalLines = getTotalWrappedLineCount();
+  if (totalLines > static_cast<size_t>(kLogVisibleLines)) {
+    return static_cast<int>(totalLines) - kLogVisibleLines;
+  }
+  return 0;
+}
+
 static const char* modeToString(GillMode mode){
   switch(mode){
     case GillMode::Differential: return "Differential";
@@ -756,11 +889,11 @@ void drawConnectionLog(){
   drawHeader("Link Log");
   oled.setFont(smallFont);
 
-  const int visibleLines = 6;
-  size_t count = connectionLogGetCount();
+  const size_t count = connectionLogGetCount();
+  const size_t totalLines = getTotalWrappedLineCount();
   int maxOffset = 0;
-  if(count > static_cast<size_t>(visibleLines)){
-    maxOffset = static_cast<int>(count) - visibleLines;
+  if(totalLines > static_cast<size_t>(kLogVisibleLines)){
+    maxOffset = static_cast<int>(totalLines) - kLogVisibleLines;
   }
   if(logScrollOffset < 0){
     logScrollOffset = 0;
@@ -773,21 +906,36 @@ void drawConnectionLog(){
     oled.setCursor(0, 24);
     oled.print("Waiting for events...");
   } else {
-    size_t startIndex = 0;
-    if(count > static_cast<size_t>(visibleLines)){
-      startIndex = static_cast<size_t>(count - visibleLines - logScrollOffset);
+    size_t startLine = 0;
+    if(totalLines > static_cast<size_t>(kLogVisibleLines)){
+      startLine = totalLines - kLogVisibleLines - static_cast<size_t>(logScrollOffset);
     }
-    for(int i = 0; i < visibleLines; ++i){
-      size_t index = startIndex + static_cast<size_t>(i);
-      if(index >= count){
-        break;
-      }
-      const char* entry = connectionLogGetEntry(index);
+    size_t currentLine = 0;
+    int drawnLines = 0;
+    for(size_t entryIndex = 0; entryIndex < count && drawnLines < kLogVisibleLines; ++entryIndex){
+      const char* entry = connectionLogGetEntry(entryIndex);
       if(!entry){
         continue;
       }
-      oled.setCursor(0, 22 + i * 8);
-      oled.print(entry);
+      size_t entryLineCount = countWrappedLines(entry);
+      if(currentLine + entryLineCount <= startLine){
+        currentLine += entryLineCount;
+        continue;
+      }
+      size_t skipLines = 0;
+      if(startLine > currentLine){
+        skipLines = startLine - currentLine;
+      }
+      for(size_t line = skipLines; line < entryLineCount && drawnLines < kLogVisibleLines; ++line){
+        char buffer[kLogLineBufferSize];
+        if(!extractWrappedLine(entry, line, buffer, sizeof(buffer))){
+          continue;
+        }
+        oled.setCursor(0, kLogStartY + drawnLines * kLogLineHeight);
+        oled.print(buffer);
+        ++drawnLines;
+      }
+      currentLine += entryLineCount;
     }
   }
 

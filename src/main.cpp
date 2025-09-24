@@ -1076,11 +1076,7 @@ void loop() {
   } else if(displayMode == DISPLAY_MODE_LOG){
     size_t count = connectionLogGetCount();
     if(delta != 0 && count > 0){
-      int visibleLines = 6;
-      int maxOffset = 0;
-      if(count > static_cast<size_t>(visibleLines)){
-        maxOffset = static_cast<int>(count) - visibleLines;
-      }
+      int maxOffset = getLogMaxScrollOffset();
       logScrollOffset = constrain(logScrollOffset - delta, 0, maxOffset);
       lastEncoderCount = encoderCount;
       audioFeedback(AudioCue::Scroll);

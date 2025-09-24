@@ -82,6 +82,10 @@ void Pid_Tuner();
 void Fire_detection();
 void displayMenu();
 
+// Returns the maximum scroll offset for the connection log based on the
+// currently stored entries and display dimensions.
+int getLogMaxScrollOffset();
+
 // Utility helpers
 void drawHeader(const char* title);
 
