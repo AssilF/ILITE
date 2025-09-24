@@ -8,7 +8,6 @@
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 
-<<<<<<< HEAD
 #define iconFont u8g2_font_open_iconic_all_2x_t
 #define networkBatteryIconFont u8g2_font_siji_t_6x10
 #define textFont u8g2_font_torussansbold8_8r
@@ -17,10 +16,7 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 #define bootSubFont u8g2_font_6x13_tf
 #define smallIconFont u8g2_font_open_iconic_all_1x_t
 
-byte displayMode = 5;
-=======
 byte displayMode = DISPLAY_MODE_LOG;
->>>>>>> 6041fcac2e7cd785df71e6ab3fb809cbc15f1706
 int homeMenuIndex = 0;
 bool homeSelected = false;
 int selectedPeer = 0;

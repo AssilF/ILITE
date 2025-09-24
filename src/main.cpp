@@ -85,7 +85,7 @@ static int speedFactor;
 
 //Addresses and statics
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; //This is the MAC universal broadcast address.
-uint8_t targetAddress[] = {0x50, 0x78, 0x7D, 0x45, 0xD9, 0xF0};  //this MAC 78:21:84:7E:68:1C new one: 78:21:84:80:3C:40 Jerray: CC:7B:5C:26:DA:30 DRONGAZ C3 50:78:7D:45:D9:F0
+uint8_t targetAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  //this MAC 78:21:84:7E:68:1C new one: 78:21:84:80:3C:40 Jerray: CC:7B:5C:26:DA:30 DRONGAZ C3 50:78:7D:45:D9:F0
 static esp_now_peer_info bot;
 
 static bool sent_Status;
@@ -209,6 +209,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   debug("Data received: ");
   debug(len);
   debug(" bytes\n");
+  connectionLogAddf("Recieved %u",len);
   // Ignore any frames from the universal broadcast address to prevent
   // pairing with ourselves when our own discovery packets are received.
   if (memcmp(mac, broadcastAddress, 6) == 0) {

@@ -22,12 +22,12 @@ void logMac(const char* prefix, const uint8_t* mac) {
 void EspNowDiscovery::begin() {
     WiFi.mode(WIFI_AP_STA);
     WiFi.setTxPower(WIFI_POWER_19_5dBm);
-    esp_err_t chanResult = esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE); //we're not setting channels for now, let them play loose.
-    if (chanResult != ESP_OK) {
-        Serial.print("[ESP-NOW] Failed to set WiFi channel: ");
-        Serial.println(chanResult);
-        connectionLogAddf("WiFi channel error: %d", chanResult);
-    }
+    // esp_err_t chanResult = esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE); //we're not setting channels for now, let them play loose.
+    // if (chanResult != ESP_OK) {
+    //     Serial.print("[ESP-NOW] Failed to set WiFi channel: ");
+    //     Serial.println(chanResult);
+    //     connectionLogAddf("WiFi channel error: %d", chanResult);
+    // }
 
     fillSelfIdentity();
     connectionLogAdd("ESP-NOW begin");
@@ -42,7 +42,6 @@ void EspNowDiscovery::begin() {
     if (!esp_now_is_peer_exist(kBroadcastMac)) {
         esp_now_peer_info_t peerInfo{};
         memcpy(peerInfo.peer_addr, kBroadcastMac, sizeof(peerInfo.peer_addr));
-        peerInfo.channel = WIFI_CHANNEL;
         peerInfo.encrypt = false;
         if (esp_now_add_peer(&peerInfo) != ESP_OK) {
             Serial.println("[ESP-NOW] Failed to add broadcast peer");
@@ -154,6 +153,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
         case MessageType::MSG_IDENTITY_REPLY:
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
             Serial.println("[ESP-NOW] Identity reply received");
+            connectionLogAddf("Recieved an identity");
             upsertPeer(packet->id, mac, now);
             ensurePeer(mac);
             audioFeedback(AudioCue::PeerDiscovered);
@@ -192,6 +192,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
             if (link.awaitingAck && macEqual(mac, link.peerMac)) {
                 Serial.println("[ESP-NOW] Pair ack received");
+                connectionLogAddf("Acked PAIR");
                 char ackLabel[24] = {};
                 macToString(mac, ackLabel, sizeof(ackLabel));
                 link.paired = true;
@@ -306,11 +307,11 @@ bool EspNowDiscovery::ensurePeer(const uint8_t* mac) const {
     }
     esp_now_peer_info_t peerInfo{};
     memcpy(peerInfo.peer_addr, mac, 6);
-    peerInfo.channel = WIFI_CHANNEL;
     peerInfo.encrypt = false;
     esp_err_t err = esp_now_add_peer(&peerInfo);
     if (err != ESP_OK) {
         Serial.print("[ESP-NOW] Failed to add peer: ");
+        connectionLogAddf("[ESPN]Failed to add peer");
         Serial.println(err);
         return false;
     }
