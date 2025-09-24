@@ -51,6 +51,9 @@ uint8_t wifiCommandTarget[6] = {0};
 bool autoDashboardEnabled = true;
 ModuleState* lastPairedModule = nullptr;
 
+bool controlSessionActive = false;
+byte logReturnMode = DISPLAY_MODE_HOME;
+
 
 
 bool botmode=0;
@@ -225,19 +228,16 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   // }
   // Let the discovery helper consume any handshake packets.
   connectionLogAddf("RX module payload (%d bytes)", len);
-  if (discovery.handleIncoming(mac, incomingData, len)) {
+  bool handshake = discovery.handleIncoming(mac, incomingData, len);
+  if (handshake) {
     debug("Discovery handshake\n");
-    // Remember the sender as the current target once paired.
-    memcpy(targetAddress, mac, 6);
-    lastReceiveTime = millis();
-    connected = true;
     int peerIndex = discovery.findPeerIndex(mac);
     if(peerIndex >= 0){
       const char* peerName = discovery.getPeerName(peerIndex);
       ModuleState* module = findModuleByName(peerName);
       if(module){
         lastPairedModule = module;
-        if(autoDashboardEnabled){
+        if(autoDashboardEnabled && controlSessionActive){
           setActiveModule(module);
         }
       }
@@ -263,14 +263,23 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
       }
       connectionLogAddf("Active peer: %s", peerName);
     }
-    displayMode = DISPLAY_MODE_DASHBOARD;
-    dashboardFocusIndex = 0;
-    logScrollOffset = 0;
-    audioFeedback(AudioCue::PeerDiscovered);
+    if(controlSessionActive && EspNowDiscovery::macEqual(mac, targetAddress)){
+      lastReceiveTime = millis();
+      connected = true;
+    }
+    return;
   }
 
   // Copy telemetry data from the incoming packet. The drone is expected to
   // send a TelemetryPacket structure defined above.
+  bool fromSelectedPeer = controlSessionActive && EspNowDiscovery::macEqual(mac, targetAddress);
+  if(!fromSelectedPeer){
+    if(!controlSessionActive){
+      connected = false;
+    }
+    return;
+  }
+
   ModuleState* active = getActiveModule();
   if(active == nullptr){
     active = getModuleState(0);
@@ -282,7 +291,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
       handleGenericIncoming(*active, incomingData, static_cast<size_t>(len));
     }
   }
-  
+
   lastReceiveTime = millis();
   connected = true;
 
@@ -878,9 +887,51 @@ static void actionToggleGillHonk(ModuleState& state, size_t slot){
 }
 
 static void processFunctionKeys(){
+  const uint8_t pins[kMaxFunctionSlots] = {button1, button2, button3};
+  if(displayMode == DISPLAY_MODE_LOG){
+    for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
+      bool pressed = digitalRead(pins[slot]) == LOW;
+      if(pressed && !functionButtonLatch[slot]){
+        functionButtonLatch[slot] = true;
+        switch(slot){
+          case 0: {
+            byte target = logReturnMode;
+            if(target == DISPLAY_MODE_DASHBOARD){
+              target = DISPLAY_MODE_HOME;
+            }
+            if(target == DISPLAY_MODE_LOG){
+              target = DISPLAY_MODE_HOME;
+            }
+            displayMode = target;
+            if(displayMode == DISPLAY_MODE_PAIRING){
+              selectedPeer = 0;
+            }
+            audioFeedback(AudioCue::Back);
+            break;
+          }
+          case 1:
+            displayMode = DISPLAY_MODE_PAIRING;
+            selectedPeer = 0;
+            lastDiscoveryTime = millis();
+            discovery.discover();
+            audioFeedback(AudioCue::Select);
+            break;
+          case 2:
+          default:
+            connectionLogClear();
+            logScrollOffset = 0;
+            audioFeedback(AudioCue::Select);
+            break;
+        }
+      } else if(!pressed){
+        functionButtonLatch[slot] = false;
+      }
+    }
+    return;
+  }
+
   ModuleState* active = getActiveModule();
   if(!active) return;
-  const uint8_t pins[kMaxFunctionSlots] = {button1, button2, button3};
   for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
     bool pressed = digitalRead(pins[slot]) == LOW;
     if(pressed && !functionButtonLatch[slot]){
@@ -940,7 +991,7 @@ void commTask(void* pvParameters){
     const uint8_t* payload = nullptr;
     size_t payloadSize = 0;
     ModuleState* active = getActiveModule();
-    if(active && active->wifiEnabled){
+    if(controlSessionActive && active && active->wifiEnabled){
       if(active->descriptor->updateControl){
         active->descriptor->updateControl();
       }
@@ -948,7 +999,7 @@ void commTask(void* pvParameters){
         payload = active->descriptor->preparePayload(payloadSize);
       }
     }
-    if(payload && payloadSize > 0){
+    if(controlSessionActive && payload && payloadSize > 0){
       if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
         sent_Status = true;
         // connectionLogAddf("TX payload (%u bytes)", static_cast<unsigned>(payloadSize));
@@ -1095,9 +1146,14 @@ void loop() {
   PeerKind kind = active ? active->descriptor->kind : PeerKind::Generic;
 
   if(connected && now - lastReceiveTime > 3000){
+    byte previousMode = displayMode;
     connected = false;
+    controlSessionActive = false;
+    memcpy(targetAddress, broadcastAddress, sizeof(targetAddress));
+    discovery.resetLinkState();
     discovery.discover();
     lastDiscoveryTime = now;
+    logReturnMode = previousMode == DISPLAY_MODE_DASHBOARD ? DISPLAY_MODE_HOME : previousMode;
     displayMode = DISPLAY_MODE_LOG;
     logScrollOffset = 0;
     selectedPeer = 0;
@@ -1307,6 +1363,8 @@ void loop() {
         if(mac){
           memcpy(targetAddress, mac, 6);
         }
+        controlSessionActive = true;
+        connected = false;
         const char* peerName = discovery.getPeerName(infoPeer);
         ModuleState* module = findModuleByName(peerName);
         setActiveModule(module);
@@ -1352,6 +1410,7 @@ void loop() {
             audioFeedback(AudioCue::Select);
             break;
           case GlobalMenuAction::Log:
+            logReturnMode = DISPLAY_MODE_GLOBAL_MENU;
             displayMode = DISPLAY_MODE_LOG;
             logScrollOffset = 0;
             audioFeedback(AudioCue::Select);
@@ -1406,11 +1465,6 @@ void loop() {
       displayMode = DISPLAY_MODE_DASHBOARD;
       dashboardFocusIndex = 0;
       audioFeedback(AudioCue::Back);
-    } else if(displayMode == DISPLAY_MODE_LOG){
-      displayMode = DISPLAY_MODE_PAIRING;
-      selectedPeer = 0;
-      lastDiscoveryTime = now;
-      audioFeedback(AudioCue::Select);
     }
     lastEncoderCount = encoderCount;
   }

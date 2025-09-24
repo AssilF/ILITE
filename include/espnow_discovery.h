@@ -82,6 +82,7 @@ public:
     const char* getPeerName(int index) const;
     int findPeerIndex(const uint8_t* mac) const;
     bool sendCommand(const uint8_t* mac, const char* command);
+    void resetLinkState();
 
     // Utility helpers.
     static void macToString(const uint8_t* mac, char* buffer, size_t bufferLen);
