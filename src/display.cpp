@@ -16,10 +16,10 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 #define bootTitleFont u8g2_font_inb38_mr
 #define bootSubFont u8g2_font_6x13_tf
 #define smallIconFont u8g2_font_open_iconic_all_1x_t
-#define statusFont u8g2_font_micro_tr
+#define statusFont u8g2_font_5x8_tf
 
-constexpr int16_t kStatusFontHeight = 5;
-constexpr int16_t kStatusBarHeight = kStatusFontHeight + 2;
+constexpr int16_t kStatusFontHeight = 8;
+constexpr int16_t kStatusBarHeight = kStatusFontHeight + 6;
 
 byte displayMode = DISPLAY_MODE_LOG;
 int homeMenuIndex = 0;
@@ -40,11 +40,13 @@ extern ModuleState* lastPairedModule;
 extern bool btnmode;
 
 namespace {
-constexpr int kLogVisibleLines = 6;
-constexpr int16_t kLogStartY = 22;
+constexpr int kLogVisibleLines = 5;
+constexpr int16_t kLogStartY = 14;
 constexpr int16_t kLogLineHeight = 8;
 constexpr size_t kLogMaxCharsPerLine = 20;
 constexpr size_t kLogLineBufferSize = 64;
+constexpr int16_t kLogButtonBarHeight = 12;
+constexpr int16_t kLogButtonPadding = 2;
 
 size_t nextWrappedSegment(const char* text, size_t start, size_t totalLength,
                           size_t* nextStart) {
@@ -1030,7 +1032,7 @@ void drawConnectionLog(){
   }
 
   if(count == 0){
-    oled.setCursor(0, 24);
+    oled.setCursor(0, kLogStartY);
     oled.print("Waiting for events...");
   } else {
     size_t startLine = 0;
@@ -1066,8 +1068,42 @@ void drawConnectionLog(){
     }
   }
 
-  oled.setCursor(0, 62);
-  oled.print("Press: Pairing");
+  const int16_t buttonY = screen_Height - kLogButtonBarHeight;
+  oled.drawHLine(0, buttonY - 1, screen_Width);
+  const char* labels[3] = {"Back", "Pairs", "Clear"};
+  int16_t x = kLogButtonPadding;
+  const int buttonCount = 3;
+  int16_t baseWidth = (screen_Width - (kLogButtonPadding * (buttonCount + 1))) / buttonCount;
+  if(baseWidth < 18){
+    baseWidth = 18;
+  }
+  for(int i = 0; i < buttonCount; ++i){
+    int16_t width = baseWidth;
+    if(i == buttonCount - 1){
+      int16_t remaining = screen_Width - x - kLogButtonPadding;
+      if(remaining > width){
+        width = remaining;
+      }
+    }
+    if(x + width > screen_Width - kLogButtonPadding){
+      width = screen_Width - kLogButtonPadding - x;
+    }
+    if(width < 12){
+      width = 12;
+    }
+    oled.drawRFrame(x, buttonY + 1, width, kLogButtonBarHeight - 2, 2);
+    int16_t textWidth = oled.getUTF8Width(labels[i]);
+    int16_t textX = x + (width - textWidth) / 2;
+    if(textX < x + 1) textX = x + 1;
+    int16_t textY = buttonY + (kLogButtonBarHeight / 2) + 3;
+    if(textY > screen_Height) textY = screen_Height;
+    oled.setCursor(textX, textY);
+    oled.print(labels[i]);
+    x += width + kLogButtonPadding;
+    if(x > screen_Width - kLogButtonPadding){
+      x = screen_Width - kLogButtonPadding;
+    }
+  }
   oled.sendBuffer();
 }
 
