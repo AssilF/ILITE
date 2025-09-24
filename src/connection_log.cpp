@@ -11,6 +11,7 @@ constexpr size_t kEntryLength = 48;
 char logEntries[kMaxEntries][kEntryLength] = {};
 size_t logCount = 0;
 size_t nextIndex = 0;
+bool loggingEnabled = false;
 
 size_t oldestIndex() {
   if (logCount == 0) {
@@ -41,6 +42,9 @@ void connectionLogInit() {
 }
 
 void connectionLogAdd(const char* message) {
+  if (!loggingEnabled) {
+    return;
+  }
   if (!message || message[0] == '\0') {
     return;
   }
@@ -48,6 +52,9 @@ void connectionLogAdd(const char* message) {
 }
 
 void connectionLogAddf(const char* fmt, ...) {
+  if (!loggingEnabled) {
+    return;
+  }
   if (!fmt) {
     return;
   }
@@ -78,4 +85,12 @@ void connectionLogClear() {
   }
   logCount = 0;
   nextIndex = 0;
+}
+
+void connectionLogSetRecordingEnabled(bool enabled) {
+  loggingEnabled = enabled;
+}
+
+bool connectionLogIsRecordingEnabled() {
+  return loggingEnabled;
 }

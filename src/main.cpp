@@ -15,6 +15,7 @@
 #include "thegill.h"
 #include "audio_feedback.h"
 #include "ui_modules.h"
+#include "menu_entries.h"
 
 //debug interface
 #define verboseEn 1
@@ -37,11 +38,18 @@ const char* password = "ASCE321#";
 //Instances
 EspNowDiscovery discovery;
 
-//tasks at the time being, we have no need for this it seems. . . 
+//tasks at the time being, we have no need for this it seems. . .
 xTaskHandle joystickPollTask = NULL;
 xTimerHandle encoderActionPollTimer = NULL;
 xTaskHandle displayEngine = NULL;
 xTaskHandle commsEngine = NULL;
+
+WifiControlCommand wifiControlCommand{PACKET_MAGIC, 1, {0, 0, 0}};
+bool wifiCommandPending = false;
+uint8_t wifiCommandTarget[6] = {0};
+
+bool autoDashboardEnabled = true;
+ModuleState* lastPairedModule = nullptr;
 
 
 
@@ -227,7 +235,12 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     if(peerIndex >= 0){
       const char* peerName = discovery.getPeerName(peerIndex);
       ModuleState* module = findModuleByName(peerName);
-      setActiveModule(module);
+      if(module){
+        lastPairedModule = module;
+        if(autoDashboardEnabled){
+          setActiveModule(module);
+        }
+      }
       if(module && module->descriptor){
         switch(module->descriptor->kind){
           case PeerKind::Bulky:
@@ -566,18 +579,19 @@ static void handleGillIncoming(ModuleState& state, const uint8_t* data, size_t l
 }
 
 static void actionToggleArm(ModuleState& state, size_t slot);
-static void actionZeroYaw(ModuleState& state, size_t slot);
 static void actionTogglePrecision(ModuleState& state, size_t slot);
+static void actionOpenPidSettings(ModuleState& state, size_t slot);
 static void actionToggleBulkyHonk(ModuleState& state, size_t slot);
 static void actionToggleBulkyLight(ModuleState& state, size_t slot);
 static void actionToggleBulkySlow(ModuleState& state, size_t slot);
 static void actionToggleGillMode(ModuleState& state, size_t slot);
 static void actionCycleGillEasing(ModuleState& state, size_t slot);
+static void actionOpenGillConfig(ModuleState& state, size_t slot);
 static void actionToggleGillHonk(ModuleState& state, size_t slot);
 
 static const FunctionActionOption kGenericOptions[] = {
   {"Toggle Arm", "ARM", actionToggleArm},
-  {"Zero Yaw", "ZERO", actionZeroYaw},
+  {"PID Screen", "PID", actionOpenPidSettings},
   {"Precision Mode", "PREC", actionTogglePrecision}
 };
 
@@ -589,7 +603,7 @@ static const FunctionActionOption kBulkyOptions[] = {
 
 static const FunctionActionOption kGillOptions[] = {
   {"Control Mode", "MODE", actionToggleGillMode},
-  {"Cycle Easing", "EASE", actionCycleGillEasing},
+  {"Config Screen", "CFG", actionOpenGillConfig},
   {"Honk Latch", "HNK", actionToggleGillHonk}
 };
 
@@ -652,6 +666,9 @@ static void initializeModuleAssignments(){
     }
     state.wifiEnabled = true;
   }
+  activeModule = &moduleStates[0];
+  lastPairedModule = activeModule;
+  autoDashboardEnabled = true;
 }
 
 size_t getModuleStateCount(){
@@ -697,6 +714,8 @@ void setActiveModule(ModuleState* state){
       functionButtonLatch[i] = false;
     }
     dashboardFocusIndex = 0;
+    genericConfigActive = false;
+    genericConfigIndex = 0;
   }
 }
 
@@ -732,6 +751,52 @@ bool getFunctionOutput(const ModuleState& state, size_t slot){
 void toggleModuleWifi(ModuleState& state){
   state.wifiEnabled = !state.wifiEnabled;
   audioFeedback(state.wifiEnabled ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+  wifiControlCommand.magic = PACKET_MAGIC;
+  wifiControlCommand.enableTelemetry = state.wifiEnabled ? 1 : 0;
+  wifiCommandPending = true;
+  memcpy(wifiCommandTarget, targetAddress, sizeof(wifiCommandTarget));
+}
+
+int buildGlobalMenuEntries(MenuEntry* entries, int maxEntries){
+  if(!entries || maxEntries <= 0){
+    return 0;
+  }
+  int count = 0;
+  auto pushEntry = [&](const char* label, GlobalMenuAction action){
+    if(count >= maxEntries){
+      return;
+    }
+    entries[count].label = label;
+    entries[count].action = action;
+    ++count;
+  };
+
+  pushEntry("Dashboards", GlobalMenuAction::Dashboards);
+  pushEntry("Pairing", GlobalMenuAction::Pairing);
+  pushEntry("Log", GlobalMenuAction::Log);
+  pushEntry("Configurations", GlobalMenuAction::Configurations);
+
+  ModuleState* active = getActiveModule();
+  PeerKind kind = active && active->descriptor ? active->descriptor->kind : PeerKind::Generic;
+  switch(kind){
+    case PeerKind::Generic:
+      pushEntry("Telemetry", GlobalMenuAction::Telemetry);
+      pushEntry("PID", GlobalMenuAction::PID);
+      break;
+    case PeerKind::Bulky:
+      pushEntry("Packet Vars", GlobalMenuAction::PacketVariables);
+      pushEntry("Modes", GlobalMenuAction::Modes);
+      break;
+    case PeerKind::Thegill:
+      pushEntry("Packet Vars", GlobalMenuAction::PacketVariables);
+      pushEntry("Modes", GlobalMenuAction::Modes);
+      break;
+    default:
+      break;
+  }
+
+  pushEntry("Back", GlobalMenuAction::Back);
+  return count;
 }
 
 static void actionToggleArm(ModuleState& state, size_t slot){
@@ -741,16 +806,20 @@ static void actionToggleArm(ModuleState& state, size_t slot){
   audioFeedback(next ? AudioCue::ToggleOn : AudioCue::ToggleOff);
 }
 
-static void actionZeroYaw(ModuleState& state, size_t slot){
-  yawCommand = 0;
-  setFunctionOutput(state, slot, false);
-  audioFeedback(AudioCue::Select);
-}
-
 static void actionTogglePrecision(ModuleState& state, size_t slot){
   dronePrecisionMode = !dronePrecisionMode;
   setFunctionOutput(state, slot, dronePrecisionMode);
   audioFeedback(dronePrecisionMode ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+}
+
+static void actionOpenPidSettings(ModuleState& state, size_t slot){
+  (void)slot;
+  displayMode = DISPLAY_MODE_PID;
+  pidGraphIndex = 0;
+  setFunctionOutput(state, slot, false);
+  genericConfigActive = false;
+  genericConfigIndex = 0;
+  audioFeedback(AudioCue::Select);
 }
 
 static void actionToggleBulkyHonk(ModuleState& state, size_t slot){
@@ -789,6 +858,17 @@ static void actionCycleGillEasing(ModuleState& state, size_t slot){
   thegillConfig.easing = static_cast<GillEasing>(next);
   thegillCommand.easing = thegillConfig.easing;
   audioFeedback(AudioCue::Scroll);
+}
+
+static void actionOpenGillConfig(ModuleState& state, size_t slot){
+  (void)slot;
+  setActiveModule(&state);
+  displayMode = DISPLAY_MODE_TELEMETRY;
+  gillConfigIndex = 0;
+  genericConfigActive = false;
+  genericConfigIndex = 0;
+  setFunctionOutput(state, slot, false);
+  audioFeedback(AudioCue::Select);
 }
 
 static void actionToggleGillHonk(ModuleState& state, size_t slot){
@@ -846,6 +926,8 @@ void displayTask(void* pvParameters){
       case DISPLAY_MODE_PEER_INFO: drawPeerInfo(); break;
       case DISPLAY_MODE_GLOBAL_MENU: drawGlobalMenu(); break;
       case DISPLAY_MODE_LOG: drawConnectionLog(); break;
+      case DISPLAY_MODE_PACKET: drawPacketVariables(); break;
+      case DISPLAY_MODE_MODES: drawModeSummary(); break;
     }
     appendPidSample();
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -875,6 +957,11 @@ void commTask(void* pvParameters){
         connectionLogAddf("payload  failed (%u bytes)", static_cast<unsigned>(payloadSize));
       }
     }
+    if(wifiCommandPending && connected){
+      if(esp_now_send(wifiCommandTarget, reinterpret_cast<uint8_t*>(&wifiControlCommand), sizeof(wifiControlCommand)) == ESP_OK){
+        wifiCommandPending = false;
+      }
+    }
     vTaskDelay(delay);
   }
 }
@@ -888,6 +975,7 @@ void setup() {
   initializeModuleAssignments();
 
   connectionLogInit();
+  connectionLogSetRecordingEnabled(true);
   connectionLogAdd("System boot");
 
   //Init Verbose =====================
@@ -985,6 +1073,15 @@ bool ispressed;
 void loop() {
   uint32_t now = millis();
   static uint32_t lastPairMaintenance = 0;
+  static byte lastDisplayMode = 0xFF;
+  if(displayMode != lastDisplayMode){
+    connectionLogSetRecordingEnabled(displayMode == DISPLAY_MODE_LOG);
+    if(displayMode != DISPLAY_MODE_TELEMETRY){
+      genericConfigActive = false;
+      genericConfigIndex = 0;
+    }
+    lastDisplayMode = displayMode;
+  }
   if(now - lastPairMaintenance >= 200){
   discovery.discover();
   lastPairMaintenance = now;
@@ -1006,6 +1103,8 @@ void loop() {
     selectedPeer = 0;
     botMotionState = STOP;
     botSpeed = 0;
+    genericConfigActive = false;
+    genericConfigIndex = 0;
     if(kind == PeerKind::Thegill){
       resetThegillState();
     }
@@ -1033,9 +1132,11 @@ void loop() {
   int delta = encoderCount - lastEncoderCount;
   if(displayMode == DISPLAY_MODE_HOME){
     size_t moduleCount = getModuleStateCount();
-    if(delta != 0 && moduleCount > 0){
-      homeMenuIndex = (homeMenuIndex + delta) % static_cast<int>(moduleCount);
-      if(homeMenuIndex < 0) homeMenuIndex += static_cast<int>(moduleCount);
+    int totalEntries = static_cast<int>(moduleCount) + 1;
+    if(totalEntries <= 0) totalEntries = 1;
+    if(delta != 0){
+      homeMenuIndex = (homeMenuIndex + delta) % totalEntries;
+      if(homeMenuIndex < 0) homeMenuIndex += totalEntries;
       lastEncoderCount = encoderCount;
       audioFeedback(AudioCue::Scroll);
     }
@@ -1043,6 +1144,14 @@ void loop() {
     if(delta != 0){
       gillConfigIndex = (gillConfigIndex + delta) % 3;
       if(gillConfigIndex < 0) gillConfigIndex += 3;
+      lastEncoderCount = encoderCount;
+      audioFeedback(AudioCue::Scroll);
+    }
+  } else if(displayMode == DISPLAY_MODE_TELEMETRY && kind == PeerKind::Generic && genericConfigActive){
+    if(delta != 0){
+      const int optionCount = 3;
+      genericConfigIndex = (genericConfigIndex + delta) % optionCount;
+      if(genericConfigIndex < 0) genericConfigIndex += optionCount;
       lastEncoderCount = encoderCount;
       audioFeedback(AudioCue::Scroll);
     }
@@ -1063,7 +1172,7 @@ void loop() {
     }
   } else if(displayMode == DISPLAY_MODE_DASHBOARD){
     if(delta != 0){
-      int focusCount = 3;
+      int focusCount = 2;
       if(active){
         focusCount += static_cast<int>(kMaxFunctionSlots);
       }
@@ -1082,12 +1191,14 @@ void loop() {
       audioFeedback(AudioCue::Scroll);
     }
   } else if(displayMode == DISPLAY_MODE_GLOBAL_MENU){
-    const int baseCount = 7;
-    const int functionEntryCount = static_cast<int>(kMaxFunctionSlots);
-    const int totalEntries = baseCount + functionEntryCount + 1 + 1;
+    MenuEntry entries[10];
+    int entryCount = buildGlobalMenuEntries(entries, 10);
+    if(entryCount <= 0){
+      entryCount = 1;
+    }
     if(delta != 0){
-      globalMenuIndex = (globalMenuIndex + delta) % totalEntries;
-      if(globalMenuIndex < 0) globalMenuIndex += totalEntries;
+      globalMenuIndex = (globalMenuIndex + delta) % entryCount;
+      if(globalMenuIndex < 0) globalMenuIndex += entryCount;
       lastEncoderCount = encoderCount;
       audioFeedback(AudioCue::Scroll);
     }
@@ -1102,23 +1213,19 @@ void loop() {
     audioFeedback(AudioCue::Scroll);
   }
 
-  if(encoderBtnState){
-    encoderBtnState = 0;
-    if(displayMode == DISPLAY_MODE_DASHBOARD){
+    if(encoderBtnState){
+      encoderBtnState = 0;
+      if(displayMode == DISPLAY_MODE_DASHBOARD){
       if(dashboardFocusIndex == 0){
-        displayMode = DISPLAY_MODE_HOME;
-        homeMenuIndex = 0;
-        audioFeedback(AudioCue::Back);
-      } else if(dashboardFocusIndex == 1){
         displayMode = DISPLAY_MODE_GLOBAL_MENU;
         globalMenuIndex = 0;
         audioFeedback(AudioCue::Select);
-      } else if(dashboardFocusIndex == 2){
+      } else if(dashboardFocusIndex == 1){
         if(active){
           toggleModuleWifi(*active);
         }
       } else if(active){
-        size_t slot = static_cast<size_t>(dashboardFocusIndex - 3);
+        size_t slot = static_cast<size_t>(dashboardFocusIndex - 2);
         if(slot < kMaxFunctionSlots){
           const FunctionActionOption* action = getAssignedAction(*active, slot);
           if(action && action->invoke){
@@ -1127,12 +1234,31 @@ void loop() {
         }
       }
     } else if(displayMode == DISPLAY_MODE_HOME){
-      ModuleState* selected = getModuleState(static_cast<size_t>(homeMenuIndex));
-      if(selected){
-        setActiveModule(selected);
+      if(homeMenuIndex == 0){
+        autoDashboardEnabled = true;
+        if(lastPairedModule){
+          setActiveModule(lastPairedModule);
+        } else {
+          ModuleState* fallback = getActiveModule();
+          if(!fallback){
+            fallback = getModuleState(0);
+          }
+          if(fallback){
+            setActiveModule(fallback);
+          }
+        }
         displayMode = DISPLAY_MODE_DASHBOARD;
         dashboardFocusIndex = 0;
         audioFeedback(AudioCue::Select);
+      } else {
+        ModuleState* selected = getModuleState(static_cast<size_t>(homeMenuIndex - 1));
+        if(selected){
+          autoDashboardEnabled = false;
+          setActiveModule(selected);
+          displayMode = DISPLAY_MODE_DASHBOARD;
+          dashboardFocusIndex = 0;
+          audioFeedback(AudioCue::Select);
+        }
       }
     } else if(displayMode == DISPLAY_MODE_PAIRING){
       int count = discovery.getPeerCount();
@@ -1153,6 +1279,21 @@ void loop() {
         } else {
           displayMode = DISPLAY_MODE_HOME;
           homeMenuIndex = 1;
+          audioFeedback(AudioCue::Back);
+        }
+      }
+    } else if(displayMode == DISPLAY_MODE_TELEMETRY && kind == PeerKind::Generic && genericConfigActive){
+      if(active){
+        if(genericConfigIndex == 0){
+          actionTogglePrecision(*active, 2);
+        } else if(genericConfigIndex == 1){
+          yawCommand = 0;
+          audioFeedback(AudioCue::Select);
+        } else {
+          genericConfigActive = false;
+          genericConfigIndex = 0;
+          displayMode = DISPLAY_MODE_DASHBOARD;
+          dashboardFocusIndex = 0;
           audioFeedback(AudioCue::Back);
         }
       }
@@ -1192,38 +1333,79 @@ void loop() {
         audioFeedback(AudioCue::Back);
       }
     } else if(displayMode == DISPLAY_MODE_GLOBAL_MENU){
-      const int baseCount = 7;
-      const int functionEntryCount = static_cast<int>(kMaxFunctionSlots);
-      const int wifiEntryIndex = baseCount + functionEntryCount;
-      if(globalMenuIndex < baseCount){
-        switch(globalMenuIndex){
-          case 0: displayMode = DISPLAY_MODE_DASHBOARD; break;
-          case 1: displayMode = DISPLAY_MODE_TELEMETRY; gillConfigIndex = 0; break;
-          case 2: displayMode = DISPLAY_MODE_PID; break;
-          case 3: displayMode = DISPLAY_MODE_ORIENTATION; break;
-          case 4: displayMode = DISPLAY_MODE_PAIRING; break;
-          case 5: displayMode = DISPLAY_MODE_LOG; logScrollOffset = 0; break;
-          case 6: displayMode = DISPLAY_MODE_ABOUT; break;
-        }
-        if(displayMode == DISPLAY_MODE_PAIRING){
-          selectedPeer = 0;
-        }
-        homeSelected = false;
-        audioFeedback(AudioCue::Select);
-      } else if(globalMenuIndex < wifiEntryIndex){
-        if(active){
-          size_t slot = static_cast<size_t>(globalMenuIndex - baseCount);
-          cycleAssignedAction(*active, slot, 1);
-          audioFeedback(AudioCue::Scroll);
-        }
-      } else if(globalMenuIndex == wifiEntryIndex){
-        if(active){
-          toggleModuleWifi(*active);
-        }
-      } else {
+      MenuEntry entries[10];
+      int entryCount = buildGlobalMenuEntries(entries, 10);
+      if(entryCount <= 0){
         displayMode = DISPLAY_MODE_DASHBOARD;
         audioFeedback(AudioCue::Back);
+      } else if(globalMenuIndex < entryCount){
+        GlobalMenuAction action = entries[globalMenuIndex].action;
+        switch(action){
+          case GlobalMenuAction::Dashboards:
+            displayMode = DISPLAY_MODE_HOME;
+            homeMenuIndex = 0;
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::Pairing:
+            displayMode = DISPLAY_MODE_PAIRING;
+            selectedPeer = 0;
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::Log:
+            displayMode = DISPLAY_MODE_LOG;
+            logScrollOffset = 0;
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::Configurations:
+            if(kind == PeerKind::Generic){
+              genericConfigActive = true;
+              genericConfigIndex = 0;
+              displayMode = DISPLAY_MODE_TELEMETRY;
+            } else if(kind == PeerKind::Thegill){
+              genericConfigActive = false;
+              displayMode = DISPLAY_MODE_TELEMETRY;
+              gillConfigIndex = 0;
+            } else {
+              genericConfigActive = false;
+              displayMode = DISPLAY_MODE_TELEMETRY;
+            }
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::Telemetry:
+            if(kind == PeerKind::Generic){
+              displayMode = DISPLAY_MODE_ORIENTATION;
+            } else {
+              displayMode = DISPLAY_MODE_TELEMETRY;
+              genericConfigActive = false;
+              genericConfigIndex = 0;
+            }
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::PID:
+            displayMode = DISPLAY_MODE_PID;
+            pidGraphIndex = 0;
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::PacketVariables:
+            displayMode = DISPLAY_MODE_PACKET;
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::Modes:
+            displayMode = DISPLAY_MODE_MODES;
+            audioFeedback(AudioCue::Select);
+            break;
+          case GlobalMenuAction::Back:
+          default:
+            displayMode = DISPLAY_MODE_DASHBOARD;
+            dashboardFocusIndex = 0;
+            audioFeedback(AudioCue::Back);
+            break;
+        }
       }
+    } else if(displayMode == DISPLAY_MODE_PACKET || displayMode == DISPLAY_MODE_MODES){
+      displayMode = DISPLAY_MODE_DASHBOARD;
+      dashboardFocusIndex = 0;
+      audioFeedback(AudioCue::Back);
     } else if(displayMode == DISPLAY_MODE_LOG){
       displayMode = DISPLAY_MODE_PAIRING;
       selectedPeer = 0;
