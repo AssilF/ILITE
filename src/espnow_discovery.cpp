@@ -20,8 +20,6 @@ const char* messageTypeToString(MessageType type) {
             return "MSG_PAIR_CONFIRM";
         case MessageType::MSG_PAIR_ACK:
             return "MSG_PAIR_ACK";
-        case MessageType::MSG_KEEPALIVE:
-            return "MSG_KEEPALIVE";
         case MessageType::MSG_COMMAND:
             return "MSG_COMMAND";
         default:
@@ -145,10 +143,6 @@ void EspNowDiscovery::discover() {
             Serial.println("[ESP-NOW] Link timeout, resetting");
             resetLink();
             connectionLogAdd("Link timeout, resetting");
-        } else if (now - link.lastKeepAliveSentMs >= BROADCAST_INTERVAL_MS) {
-            if (sendPacket(MessageType::MSG_KEEPALIVE, link.peerMac)) {
-                link.lastKeepAliveSentMs = now;
-            }
         }
     }
 #else
@@ -157,10 +151,6 @@ void EspNowDiscovery::discover() {
             Serial.println("[ESP-NOW] Controller timeout, resetting link");
             resetLink();
             connectionLogAdd("Controller timeout, resetting link");
-        } else if (now - link.lastKeepAliveSentMs >= BROADCAST_INTERVAL_MS) {
-            if (sendPacket(MessageType::MSG_KEEPALIVE, link.peerMac)) {
-                link.lastKeepAliveSentMs = now;
-            }
         }
     }
 #endif
@@ -179,6 +169,14 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
 
     if (packet->version != kProtocolVersion) {
         return false;
+    }
+
+    if (link.paired && macEqual(mac, link.peerMac)) {
+        link.lastActivityMs = now;
+        int index = findPeerIndex(mac);
+        if (index >= 0) {
+            peers[index].lastSeen = now;
+        }
     }
 
     switch (type) {
@@ -223,7 +221,6 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                 link.peerIndex = index;
                 memcpy(link.peerMac, mac, sizeof(link.peerMac));
                 link.lastActivityMs = now;
-                link.lastKeepAliveSentMs = now;
                 sendPacket(MessageType::MSG_PAIR_ACK, mac);
                 peers[index].acked = true;
                 Serial.println("[ESP-NOW] Paired with controller");
@@ -245,7 +242,6 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                 link.paired = true;
                 link.awaitingAck = false;
                 link.lastActivityMs = now;
-                link.lastKeepAliveSentMs = now;
                 int index = findPeerIndex(mac);
                 if (index >= 0) {
                     peers[index].acked = true;
@@ -260,17 +256,6 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
 #else
             return false;
 #endif
-
-        case MessageType::MSG_KEEPALIVE:
-            if (link.paired && macEqual(mac, link.peerMac)) {
-                link.lastActivityMs = now;
-                int index = findPeerIndex(mac);
-                if (index >= 0) {
-                    peers[index].lastSeen = now;
-                }
-                return true;
-            }
-            return false;
 
         case MessageType::MSG_COMMAND:
             if (len >= static_cast<int>(sizeof(CommandPacket))) {
