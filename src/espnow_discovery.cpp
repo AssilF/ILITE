@@ -10,6 +10,51 @@ namespace {
 
 constexpr uint8_t kBroadcastMac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
+const char* messageTypeToString(MessageType type) {
+    switch (type) {
+        case MessageType::MSG_PAIR_REQ:
+            return "MSG_PAIR_REQ";
+        case MessageType::MSG_IDENTITY_REPLY:
+            return "MSG_IDENTITY_REPLY";
+        case MessageType::MSG_PAIR_CONFIRM:
+            return "MSG_PAIR_CONFIRM";
+        case MessageType::MSG_PAIR_ACK:
+            return "MSG_PAIR_ACK";
+        case MessageType::MSG_KEEPALIVE:
+            return "MSG_KEEPALIVE";
+        case MessageType::MSG_COMMAND:
+            return "MSG_COMMAND";
+        default:
+            return "MSG_UNKNOWN";
+    }
+}
+
+const char* macLabel(const uint8_t* mac, char* buffer, size_t bufferLen) {
+    if (!buffer || bufferLen == 0) {
+        return "";
+    }
+    if (!mac) {
+        snprintf(buffer, bufferLen, "(null)");
+        return buffer;
+    }
+    if (EspNowDiscovery::macEqual(mac, kBroadcastMac)) {
+        snprintf(buffer, bufferLen, "broadcast");
+        return buffer;
+    }
+    EspNowDiscovery::macToString(mac, buffer, bufferLen);
+    return buffer;
+}
+
+void logTx(MessageType type, const uint8_t* mac) {
+    char label[24] = {};
+    connectionLogAddf("TX %s to %s", messageTypeToString(type), macLabel(mac, label, sizeof(label)));
+}
+
+void logRx(MessageType type, const uint8_t* mac) {
+    char label[24] = {};
+    connectionLogAddf("RX %s from %s", messageTypeToString(type), macLabel(mac, label, sizeof(label)));
+}
+
 void logMac(const char* prefix, const uint8_t* mac) {
     char buffer[24] = {};
     EspNowDiscovery::macToString(mac, buffer, sizeof(buffer));
@@ -133,6 +178,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
 
     uint32_t now = millis();
     MessageType type = static_cast<MessageType>(packet->type);
+    logRx(type, mac);
 
     switch (type) {
         case MessageType::MSG_PAIR_REQ:
@@ -345,6 +391,7 @@ bool EspNowDiscovery::sendPacket(MessageType type, const uint8_t* mac) {
         connectionLogAddf("Send failed (%u): %d", static_cast<unsigned>(type), err);
         return false;
     }
+    logTx(type, mac);
     return true;
 }
 
@@ -478,6 +525,7 @@ bool EspNowDiscovery::sendCommand(const uint8_t* mac, const char* command) {
 
     char label[24] = {};
     macToString(mac, label, sizeof(label));
+    logTx(MessageType::MSG_COMMAND, mac);
     connectionLogAddf("Command sent to %s: %s", label, packet.command);
     return true;
 }

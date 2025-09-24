@@ -209,7 +209,6 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   debug("Data received: ");
   debug(len);
   debug(" bytes\n");
-  connectionLogAddf("Recieved %u",len);
   // Ignore any frames from the universal broadcast address to prevent
   // pairing with ourselves when our own discovery packets are received.
   if (memcmp(mac, broadcastAddress, 6) == 0) {
@@ -271,6 +270,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
       handleGenericIncoming(*active, incomingData, static_cast<size_t>(len));
     }
   }
+  connectionLogAddf("RX module payload (%d bytes)", len);
   lastReceiveTime = millis();
   connected = true;
 
@@ -870,8 +870,10 @@ void commTask(void* pvParameters){
     if(payload && payloadSize > 0){
       if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
         sent_Status = true;
+        connectionLogAddf("TX module payload (%u bytes)", static_cast<unsigned>(payloadSize));
       }else{
         sent_Status = false;
+        connectionLogAddf("Module payload send failed (%u bytes)", static_cast<unsigned>(payloadSize));
       }
     }
     vTaskDelay(delay);
