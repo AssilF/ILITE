@@ -49,6 +49,7 @@ enum class MessageType : uint8_t {
     MSG_PAIR_CONFIRM = 0x03,
     MSG_PAIR_ACK = 0x04,
     MSG_KEEPALIVE = 0x05,
+    MSG_COMMAND = 0x06,
 };
 
 struct Packet {
@@ -57,6 +58,11 @@ struct Packet {
     Identity id;
     uint32_t monotonicMs;
     uint8_t reserved[8];
+};
+
+struct CommandPacket {
+    Packet header;
+    char command[48];
 };
 #pragma pack(pop)
 
@@ -75,6 +81,7 @@ public:
     const uint8_t* getPeer(int index) const;
     const char* getPeerName(int index) const;
     int findPeerIndex(const uint8_t* mac) const;
+    bool sendCommand(const uint8_t* mac, const char* command);
 
     // Utility helpers.
     static void macToString(const uint8_t* mac, char* buffer, size_t bufferLen);

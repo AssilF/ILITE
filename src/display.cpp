@@ -1,5 +1,6 @@
 #include "display.h"
 #include "thegill.h"
+#include "connection_log.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -7,7 +8,7 @@
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 
-byte displayMode = 5;
+byte displayMode = DISPLAY_MODE_LOG;
 int homeMenuIndex = 0;
 bool homeSelected = false;
 int selectedPeer = 0;
@@ -17,6 +18,7 @@ int infoPeer = 0;
 int gillConfigIndex = 0;
 int globalMenuIndex = 0;
 int dashboardFocusIndex = 0;
+int logScrollOffset = 0;
 
 static const char* modeToString(GillMode mode){
   switch(mode){
@@ -518,6 +520,7 @@ void drawGlobalMenu(){
     "PID Graph",
     "Orientation",
     "Pairing",
+    "Link Log",
     "About"
   };
   const int baseCount = sizeof(baseItems) / sizeof(baseItems[0]);
@@ -690,14 +693,6 @@ void drawBulkyDashboard(){
 
 void drawGenericDashboard(){
   oled.clearBuffer();
-  if(!discovery.hasPeers()){
-    oled.setFont(smallFont);
-    uint8_t w = oled.getUTF8Width("Pair a device");
-    oled.setCursor((screen_Width - w)/2, screen_Height/2);
-    oled.print("Pair a device");
-    return;
-  }
-
   const float xSize = 20.0f;
   const float ySize = 10.0f;
   const float zSize = 5.0f;
@@ -751,6 +746,51 @@ void drawGenericDashboard(){
   oled.setCursor(0,24); oled.print("P:");   oled.print(emission.pitchAngle);
   oled.setCursor(0,32); oled.print("R:");   oled.print(emission.rollAngle);
   oled.setCursor(0,40); oled.print("Y:");   oled.print(emission.yawAngle);
+}
+
+void drawConnectionLog(){
+  oled.clearBuffer();
+  drawHeader("Link Log");
+  oled.setFont(smallFont);
+
+  const int visibleLines = 6;
+  size_t count = connectionLogGetCount();
+  int maxOffset = 0;
+  if(count > static_cast<size_t>(visibleLines)){
+    maxOffset = static_cast<int>(count) - visibleLines;
+  }
+  if(logScrollOffset < 0){
+    logScrollOffset = 0;
+  }
+  if(logScrollOffset > maxOffset){
+    logScrollOffset = maxOffset;
+  }
+
+  if(count == 0){
+    oled.setCursor(0, 24);
+    oled.print("Waiting for events...");
+  } else {
+    size_t startIndex = 0;
+    if(count > static_cast<size_t>(visibleLines)){
+      startIndex = static_cast<size_t>(count - visibleLines - logScrollOffset);
+    }
+    for(int i = 0; i < visibleLines; ++i){
+      size_t index = startIndex + static_cast<size_t>(i);
+      if(index >= count){
+        break;
+      }
+      const char* entry = connectionLogGetEntry(index);
+      if(!entry){
+        continue;
+      }
+      oled.setCursor(0, 22 + i * 8);
+      oled.print(entry);
+    }
+  }
+
+  oled.setCursor(0, 62);
+  oled.print("Press: Pairing");
+  oled.sendBuffer();
 }
 
 static void drawDashboardOverlays(){
@@ -816,6 +856,10 @@ static void drawDashboardOverlays(){
 }
 
 void drawDashboard(){
+  if(!discovery.hasPeers()){
+    drawConnectionLog();
+    return;
+  }
   ModuleState* active = getActiveModule();
   if(active && active->descriptor && active->descriptor->drawDashboard){
     active->descriptor->drawDashboard();
