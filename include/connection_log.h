@@ -20,3 +20,9 @@ const char* connectionLogGetEntry(size_t index);
 
 // Clears all stored log entries.
 void connectionLogClear();
+
+// Enables or disables recording of log entries.
+void connectionLogSetRecordingEnabled(bool enabled);
+
+// Returns true if recording is currently enabled.
+bool connectionLogIsRecordingEnabled();

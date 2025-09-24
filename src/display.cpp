@@ -1,6 +1,7 @@
 #include "display.h"
 #include "thegill.h"
 #include "connection_log.h"
+#include "menu_entries.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -15,6 +16,10 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 #define bootTitleFont u8g2_font_inb38_mr
 #define bootSubFont u8g2_font_6x13_tf
 #define smallIconFont u8g2_font_open_iconic_all_1x_t
+#define statusFont u8g2_font_micro_tr
+
+constexpr int16_t kStatusFontHeight = 5;
+constexpr int16_t kStatusBarHeight = kStatusFontHeight + 2;
 
 byte displayMode = DISPLAY_MODE_LOG;
 int homeMenuIndex = 0;
@@ -24,9 +29,15 @@ int lastEncoderCount = 0;
 unsigned long lastDiscoveryTime = 0;
 int infoPeer = 0;
 int gillConfigIndex = 0;
+bool genericConfigActive = false;
+int genericConfigIndex = 0;
 int globalMenuIndex = 0;
 int dashboardFocusIndex = 0;
 int logScrollOffset = 0;
+
+extern bool autoDashboardEnabled;
+extern ModuleState* lastPairedModule;
+extern bool btnmode;
 
 namespace {
 constexpr int kLogVisibleLines = 6;
@@ -441,6 +452,34 @@ void drawTelemetryInfo(){
     drawThegillConfig();
     return;
   }
+  if(active && active->descriptor->kind == PeerKind::Generic && genericConfigActive){
+    oled.clearBuffer();
+    drawHeader("Drone Config");
+    oled.setFont(smallFont);
+    bool precisionOn = getFunctionOutput(*active, 2);
+    const int startY = 22;
+    const int lineHeight = 12;
+    for(int i = 0; i < 3; ++i){
+      oled.setCursor(0, startY + i * lineHeight);
+      oled.print(i == genericConfigIndex ? ">" : " ");
+      switch(i){
+        case 0:
+          oled.print("Precision: ");
+          oled.print(precisionOn ? "On" : "Off");
+          break;
+        case 1:
+          oled.print("Zero Yaw");
+          break;
+        default:
+          oled.print("Back");
+          break;
+      }
+    }
+    oled.setCursor(0, 62);
+    oled.print("Press to apply");
+    oled.sendBuffer();
+    return;
+  }
 
   oled.clearBuffer();
   drawHeader("Telemetry");
@@ -463,6 +502,106 @@ void drawTelemetryInfo(){
     oled.print(alertIcon);
   }
   drawHomeFooter();
+  oled.sendBuffer();
+}
+
+void drawPacketVariables(){
+  oled.clearBuffer();
+  ModuleState* active = getActiveModule();
+  PeerKind kind = active && active->descriptor ? active->descriptor->kind : PeerKind::Generic;
+  oled.setFont(smallFont);
+  if(kind == PeerKind::Bulky){
+    drawHeader("Packet Vars");
+    int y = 18;
+    oled.setCursor(0, y);      oled.print("Front:");   oled.print(Front_Distance);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Bottom:");  oled.print(Bottom_Distance);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Speed:");   oled.print(speed);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Battery:"); oled.print(batteryLevel);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Line:");    oled.print(linePosition, BIN);
+  } else if(kind == PeerKind::Thegill){
+    drawHeader("Gill Packet");
+    int y = 18;
+    auto printPair = [&](const char* label, float value){
+      char buf[8];
+      formatMotorPercent(value, buf, sizeof(buf));
+      oled.setCursor(0, y);
+      oled.print(label);
+      oled.print(':');
+      oled.print(buf);
+      y += 8;
+    };
+    printPair("Target L", thegillRuntime.targetLeftFront);
+    printPair("Target R", thegillRuntime.targetRightFront);
+    printPair("Actual L", thegillRuntime.actualLeftFront);
+    printPair("Actual R", thegillRuntime.actualRightFront);
+    oled.setCursor(0, y);      oled.print("Brake:"); oled.print(thegillRuntime.brakeActive ? "ON" : "OFF");
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Honk:");  oled.print(thegillRuntime.honkActive ? "ON" : "OFF");
+  } else {
+    drawHeader("Packet Vars");
+    int y = 18;
+    oled.setCursor(0, y);      oled.print("Throttle:"); oled.print(emission.throttle);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Pitch:");    oled.print(emission.pitchAngle);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Roll:");     oled.print(emission.rollAngle);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Yaw:");      oled.print(emission.yawAngle);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Arm:");      oled.print(btnmode ? "ON" : "OFF");
+  }
+  oled.setCursor(0, 62);
+  oled.print("Press: Dashboard");
+  oled.sendBuffer();
+}
+
+void drawModeSummary(){
+  oled.clearBuffer();
+  ModuleState* active = getActiveModule();
+  PeerKind kind = active && active->descriptor ? active->descriptor->kind : PeerKind::Generic;
+  drawHeader("Modes");
+  oled.setFont(smallFont);
+  int y = 18;
+  if(!active){
+    oled.setCursor(0, y);
+    oled.print("No module");
+  } else if(kind == PeerKind::Bulky){
+    for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
+      const FunctionActionOption* action = getAssignedAction(*active, slot);
+      const char* label = action ? action->name : "Function";
+      bool state = getFunctionOutput(*active, slot);
+      oled.setCursor(0, y);
+      oled.print(label);
+      oled.print(": ");
+      oled.print(state ? "ON" : "OFF");
+      y += 10;
+    }
+  } else if(kind == PeerKind::Thegill){
+    oled.setCursor(0, y);      oled.print("Mode: ");  oled.print(modeToString(thegillConfig.mode));
+    y += 10;
+    oled.setCursor(0, y);      oled.print("Easing: ");oled.print(easingToString(thegillConfig.easing));
+    y += 10;
+    oled.setCursor(0, y);      oled.print("Brake: "); oled.print(thegillRuntime.brakeActive ? "ON" : "OFF");
+    y += 10;
+    oled.setCursor(0, y);      oled.print("Honk: ");  oled.print(thegillRuntime.honkActive ? "ON" : "OFF");
+  } else {
+    for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
+      const FunctionActionOption* action = getAssignedAction(*active, slot);
+      const char* label = action ? action->name : "Function";
+      bool state = getFunctionOutput(*active, slot);
+      oled.setCursor(0, y);
+      oled.print(label);
+      oled.print(": ");
+      oled.print(state ? "ON" : "OFF");
+      y += 10;
+    }
+  }
+  oled.setCursor(0, 62);
+  oled.print("Press: Dashboard");
   oled.sendBuffer();
 }
 
@@ -600,7 +739,8 @@ void drawHomeMenu(){
   oled.clearBuffer();
   drawHeader("Layouts");
   size_t moduleCount = getModuleStateCount();
-  if(moduleCount == 0){
+  int totalEntries = static_cast<int>(moduleCount) + 1;
+  if(totalEntries <= 0){
     oled.setFont(smallFont);
     oled.setCursor(8, 32);
     oled.print("No layouts available");
@@ -609,20 +749,29 @@ void drawHomeMenu(){
   }
 
   if(homeMenuIndex < 0) homeMenuIndex = 0;
-  if(homeMenuIndex >= static_cast<int>(moduleCount)) homeMenuIndex = static_cast<int>(moduleCount) - 1;
+  if(homeMenuIndex >= totalEntries) homeMenuIndex = totalEntries - 1;
 
-  ModuleState* state = getModuleState(static_cast<size_t>(homeMenuIndex));
   const int16_t cardX = 6;
   const int16_t cardY = 16;
-  if(state && state->descriptor && state->descriptor->drawLayoutCard){
-    state->descriptor->drawLayoutCard(*state, cardX, cardY, true);
+  if(homeMenuIndex == 0){
+    drawLayoutCardFrame(cardX, cardY, "Auto", autoDashboardEnabled ? "Following paired" : "Manual override", true);
+    if(lastPairedModule && lastPairedModule->descriptor){
+      oled.setFont(smallFont);
+      oled.setCursor(cardX + 6, cardY + 26);
+      oled.print(lastPairedModule->descriptor->displayName);
+    }
+  } else {
+    ModuleState* state = getModuleState(static_cast<size_t>(homeMenuIndex - 1));
+    if(state && state->descriptor && state->descriptor->drawLayoutCard){
+      state->descriptor->drawLayoutCard(*state, cardX, cardY, true);
+    }
   }
 
-  if(moduleCount > 1){
+  if(totalEntries > 1){
     if(homeMenuIndex > 0){
       oled.drawTriangle(2, 36, 6, 30, 6, 42);
     }
-    if(homeMenuIndex + 1 < static_cast<int>(moduleCount)){
+    if(homeMenuIndex + 1 < totalEntries){
       int16_t x = screen_Width - 2;
       oled.drawTriangle(x, 36, x-4, 30, x-4, 42);
     }
@@ -632,7 +781,7 @@ void drawHomeMenu(){
   oled.setCursor(4, screen_Height - 2);
   oled.print("Press to activate");
   char buffer[12];
-  snprintf(buffer, sizeof(buffer), "%d/%d", homeMenuIndex + 1, static_cast<int>(moduleCount));
+  snprintf(buffer, sizeof(buffer), "%d/%d", homeMenuIndex + 1, totalEntries);
   int width = oled.getUTF8Width(buffer);
   oled.setCursor(screen_Width - width - 2, screen_Height - 2);
   oled.print(buffer);
@@ -648,50 +797,21 @@ void drawHomeFooter(){
 void drawGlobalMenu(){
   oled.clearBuffer();
   drawHeader("Menu");
-  ModuleState* active = getActiveModule();
-  const char* baseItems[] = {
-    "Dashboard",
-    (active && active->descriptor->kind == PeerKind::Thegill) ? "Config" : "Telemetry",
-    "PID Graph",
-    "Orientation",
-    "Pairing",
-    "Link Log",
-    "About"
-  };
-  const int baseCount = sizeof(baseItems) / sizeof(baseItems[0]);
-  const int functionEntryOffset = baseCount;
-  const int functionEntryCount = static_cast<int>(kMaxFunctionSlots);
-  const int wifiEntryIndex = functionEntryOffset + functionEntryCount;
-  const int backEntryIndex = wifiEntryIndex + 1;
-  const int totalCount = backEntryIndex + 1;
-
   oled.setFont(smallFont);
+  MenuEntry entries[10];
+  int count = buildGlobalMenuEntries(entries, 10);
   int y = 18;
-  for(int i = 0; i < totalCount; ++i){
+  if(count <= 0){
     oled.setCursor(0, y);
-    oled.print(i == globalMenuIndex ? ">" : " ");
-    if(i < baseCount){
-      oled.print(baseItems[i]);
-    } else if(i < wifiEntryIndex){
-      int slot = i - functionEntryOffset;
-      if(active){
-        const FunctionActionOption* action = getAssignedAction(*active, slot);
-        oled.print("Key "); oled.print(slot + 1); oled.print(": ");
-        oled.print(action ? action->name : "--");
-      } else {
-        oled.print("Key "); oled.print(slot + 1); oled.print(": --");
-      }
-    } else if(i == wifiEntryIndex){
-      oled.print("WiFi: ");
-      if(active && active->wifiEnabled){
-        oled.print("Enabled");
-      } else {
-        oled.print("Disabled");
-      }
-    } else {
-      oled.print("Back");
+    oled.print("No options");
+  } else {
+    if(globalMenuIndex >= count) globalMenuIndex = count - 1;
+    for(int i = 0; i < count; ++i){
+      oled.setCursor(0, y);
+      oled.print(i == globalMenuIndex ? ">" : " ");
+      oled.print(entries[i].label);
+      y += 10;
     }
-    y += 10;
   }
 
   oled.setCursor(0, 62);
@@ -769,11 +889,11 @@ static void drawMotorBarLabels(int x, int y,
 
 void drawThegillDashboard(){
   oled.clearBuffer();
-  drawHeader("The'gill S3");
   oled.setFont(smallFont);
-  oled.setCursor(0,14); oled.print("Mode: "); oled.print(modeToString(thegillConfig.mode));
-  oled.setCursor(0,22); oled.print("Ease: "); oled.print(easingToString(thegillConfig.easing));
-  oled.setCursor(0,30); oled.print("Rate: "); oled.print(thegillRuntime.easingRate, 1);
+  int16_t top = kStatusBarHeight + 4;
+  oled.setCursor(0, top);         oled.print("Mode: "); oled.print(modeToString(thegillConfig.mode));
+  oled.setCursor(0, top + 8);     oled.print("Ease: "); oled.print(easingToString(thegillConfig.easing));
+  oled.setCursor(0, top + 16);    oled.print("Rate: "); oled.print(thegillRuntime.easingRate, 1);
 
 
   float leftTarget = (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear) * 0.5f;
@@ -781,19 +901,19 @@ void drawThegillDashboard(){
   float leftActual = (thegillRuntime.actualLeftFront + thegillRuntime.actualLeftRear) * 0.5f;
   float rightActual = (thegillRuntime.actualRightFront + thegillRuntime.actualRightRear) * 0.5f;
 
-  oled.setCursor(0,42); oled.print("Left");
-  drawMotorBar(40, 36, leftActual, leftTarget);
-  drawMotorBarLabels(40, 36, "LF", thegillRuntime.actualLeftFront,
+  oled.setCursor(0, top + 26);    oled.print("Left");
+  drawMotorBar(40, top + 20, leftActual, leftTarget);
+  drawMotorBarLabels(40, top + 20, "LF", thegillRuntime.actualLeftFront,
                              "LR", thegillRuntime.actualLeftRear);
 
-  oled.setCursor(0,56); oled.print("Right");
-  drawMotorBar(40, 50, rightActual, rightTarget);
-  drawMotorBarLabels(40, 50, "RF", thegillRuntime.actualRightFront,
+  oled.setCursor(0, top + 40);    oled.print("Right");
+  drawMotorBar(40, top + 34, rightActual, rightTarget);
+  drawMotorBarLabels(40, top + 34, "RF", thegillRuntime.actualRightFront,
                               "RR", thegillRuntime.actualRightRear);
 
 
-  oled.setCursor(100,14); oled.print(thegillRuntime.brakeActive ? "BRK" : "   ");
-  oled.setCursor(100,22); oled.print(thegillRuntime.honkActive ? "HNK" : "   ");
+  oled.setCursor(96, top);        oled.print(thegillRuntime.brakeActive ? "BRK" : "   ");
+  oled.setCursor(96, top + 8);    oled.print(thegillRuntime.honkActive ? "HNK" : "   ");
 }
 
 void drawThegillConfig(){
@@ -832,8 +952,9 @@ void drawGenericDashboard(){
   const float xSize = 20.0f;
   const float ySize = 10.0f;
   const float zSize = 5.0f;
+  const int16_t top = kStatusBarHeight + 2;
   const int cx = screen_Width/2;
-  const int cy = screen_Height/2 + 6;
+  const int cy = top + (screen_Height - top) / 2;
   struct Vec3 { float x,y,z; };
   const Vec3 verts[8] = {
     {-xSize,-ySize,-zSize}, { xSize,-ySize,-zSize}, { xSize, ySize,-zSize}, {-xSize, ySize,-zSize},
@@ -877,11 +998,16 @@ void drawGenericDashboard(){
                       cx+3, head + (arrowLen>0?-5:5));
   }
   oled.setFont(smallFont);
-  oled.setCursor(0,8);  oled.print("Alt:"); oled.print(telemetry.altitude);
-  oled.setCursor(0,16); oled.print("Thr:"); oled.print(emission.throttle);
-  oled.setCursor(0,24); oled.print("P:");   oled.print(emission.pitchAngle);
-  oled.setCursor(0,32); oled.print("R:");   oled.print(emission.rollAngle);
-  oled.setCursor(0,40); oled.print("Y:");   oled.print(emission.yawAngle);
+  int16_t textY = top + 6;
+  oled.setCursor(0, textY);           oled.print("Alt:"); oled.print(telemetry.altitude);
+  textY += 8;
+  oled.setCursor(0, textY);           oled.print("Thr:"); oled.print(emission.throttle);
+  textY += 8;
+  oled.setCursor(0, textY);           oled.print("P:");   oled.print(emission.pitchAngle);
+  textY += 8;
+  oled.setCursor(0, textY);           oled.print("R:");   oled.print(emission.rollAngle);
+  textY += 8;
+  oled.setCursor(0, textY);           oled.print("Y:");   oled.print(emission.yawAngle);
 }
 
 void drawConnectionLog(){
@@ -944,116 +1070,123 @@ void drawConnectionLog(){
   oled.sendBuffer();
 }
 
-static void drawDashboardOverlays(){
+static void drawStatusBar(){
+  oled.setFont(statusFont);
+  oled.setDrawColor(0);
+  oled.drawBox(0, 0, screen_Width, kStatusBarHeight);
+  oled.setDrawColor(1);
+  oled.drawHLine(0, kStatusBarHeight - 1, screen_Width);
+
   ModuleState* active = getActiveModule();
-  if(!active) return;
-  auto drawChip = [&](int16_t x, int16_t y, const char* label, bool focused){
-    const int16_t width = 34;
-    const int16_t height = 12;
+  const int buttonCount = 2 + static_cast<int>(kMaxFunctionSlots);
+  constexpr int16_t kMinNameWidth = 32;
+  int16_t nameAreaWidth = kMinNameWidth;
+  if(nameAreaWidth > screen_Width - buttonCount * 10){
+    nameAreaWidth = screen_Width - buttonCount * 10;
+    if(nameAreaWidth < 12){
+      nameAreaWidth = 12;
+    }
+  }
+  int16_t buttonWidth = (screen_Width - nameAreaWidth) / buttonCount;
+  if(buttonWidth < 10){
+    buttonWidth = 10;
+    nameAreaWidth = screen_Width - buttonWidth * buttonCount;
+    if(nameAreaWidth < 10){
+      nameAreaWidth = 10;
+    }
+  }
+  int16_t remainder = screen_Width - (buttonWidth * buttonCount + nameAreaWidth);
+  if(remainder > 0){
+    nameAreaWidth += remainder;
+  }
+
+  auto drawButton = [&](int index, int focusIndex, const char* label, bool activeState){
+    int16_t x = index * buttonWidth;
+    int16_t width = buttonWidth;
+    if(index == buttonCount - 1){
+      width = screen_Width - nameAreaWidth - x;
+    }
+    if(width < 8) width = 8;
+    bool focused = dashboardFocusIndex == focusIndex;
     if(focused){
-      oled.setDrawColor(1);
-      oled.drawRBox(x, y, width, height, 3);
+      oled.drawRFrame(x, 0, width - 1, kStatusBarHeight - 1, 2);
+    } else {
+      oled.drawFrame(x, 0, width - 1, kStatusBarHeight - 1);
+    }
+    if(activeState){
+      oled.drawBox(x + 2, 2, width - 5, kStatusBarHeight - 5);
       oled.setDrawColor(0);
     } else {
       oled.setDrawColor(1);
-      oled.drawRFrame(x, y, width, height, 3);
     }
-    oled.setFont(smallFont);
     int16_t textWidth = oled.getUTF8Width(label);
-    int16_t textX = x + (width - textWidth)/2;
-    if(textX < x + 2) textX = x + 2;
-    oled.setCursor(textX, y + height - 3);
+    int16_t textX = x + (width - textWidth) / 2;
+    if(textX < x + 1) textX = x + 1;
+    int16_t textY = (kStatusBarHeight + kStatusFontHeight) / 2;
+    oled.setCursor(textX, textY);
     oled.print(label);
     oled.setDrawColor(1);
   };
 
-  const int16_t chipX = screen_Width - 36;
-  drawChip(chipX, 0, "Menu", dashboardFocusIndex == 1);
-  drawChip(chipX, 14, "WiFi", dashboardFocusIndex == 2);
-
-  // WiFi indicator dot
-  int16_t dotX = chipX + 26;
-  int16_t dotY = 20;
-  if(active->wifiEnabled){
-    oled.drawDisc(dotX, dotY, 2);
-  } else {
-    oled.drawCircle(dotX, dotY, 2);
-  }
-
-  // Reserve space for function bar and hardware button strip
-  const int16_t statusStripHeight = 3;
-  const int16_t functionBarHeight = 9;
-  const int16_t barY = screen_Height - statusStripHeight - functionBarHeight;
-  oled.setDrawColor(0);
-  oled.drawBox(0, barY, screen_Width, functionBarHeight + statusStripHeight);
-  oled.setDrawColor(1);
-
-  const int16_t slotWidth = screen_Width / static_cast<int16_t>(kMaxFunctionSlots);
+  drawButton(0, 0, "Menu", false);
+  bool wifiOn = active && active->wifiEnabled;
+  drawButton(1, 1, wifiOn ? "WiFi" : "WiFi", wifiOn);
   for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
-    const FunctionActionOption* action = getAssignedAction(*active, slot);
+    const FunctionActionOption* action = active ? getAssignedAction(*active, slot) : nullptr;
     const char* label = action ? action->shortLabel : "---";
-    bool activeState = getFunctionOutput(*active, slot);
-    bool focused = dashboardFocusIndex == static_cast<int>(slot) + 3;
-    int16_t x = static_cast<int16_t>(slot * slotWidth);
-    int16_t width = (slot == kMaxFunctionSlots - 1) ? screen_Width - x : slotWidth;
-    int16_t outerWidth = width - 1;
-    if(focused){
-      oled.drawRFrame(x, barY, outerWidth, functionBarHeight, 2);
-    } else {
-      oled.drawFrame(x, barY, outerWidth, functionBarHeight);
-    }
-
-    int16_t innerX = x + 2;
-    int16_t innerY = barY + 2;
-    int16_t innerWidth = outerWidth - 3;
-    int16_t innerHeight = functionBarHeight - 4;
-    if(innerWidth < 2) innerWidth = 2;
-    if(innerHeight < 2) innerHeight = 2;
-
-    if(activeState){
-      oled.drawBox(innerX, innerY, innerWidth, innerHeight);
-      oled.setDrawColor(0);
-    } else {
-      oled.drawFrame(innerX, innerY, innerWidth, innerHeight);
-    }
-
-    oled.setFont(smallFont);
-    int16_t labelWidth = oled.getUTF8Width(label);
-    int16_t textX = x + (outerWidth - labelWidth) / 2;
-    if(textX < x + 2) textX = x + 2;
-    int16_t textY = barY + functionBarHeight - 2;
-    oled.setCursor(textX, textY);
-    oled.print(label);
-    oled.setDrawColor(1);
+    bool state = active ? getFunctionOutput(*active, slot) : false;
+    drawButton(static_cast<int>(slot) + 2, static_cast<int>(slot) + 2, label, state);
   }
 
-  // Hardware button state strip
-  const int16_t stripY = screen_Height - statusStripHeight;
-  const uint8_t buttonPins[kMaxFunctionSlots] = {button1, button2, button3};
-  for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
-    int16_t x = static_cast<int16_t>(slot * slotWidth);
-    int16_t width = (slot == kMaxFunctionSlots - 1) ? screen_Width - x : slotWidth;
-    int16_t outerWidth = width - 1;
-    oled.drawFrame(x, stripY, outerWidth, statusStripHeight);
-    bool pressed = digitalRead(buttonPins[slot]) == LOW;
-    if(pressed){
-      oled.drawBox(x + 1, stripY + 1, outerWidth - 2, statusStripHeight - 2);
+  int16_t nameX = buttonWidth * buttonCount;
+  const char* name = "--";
+  char buffer[32];
+  if(autoDashboardEnabled && lastPairedModule && lastPairedModule->descriptor){
+    snprintf(buffer, sizeof(buffer), "Auto:%s", lastPairedModule->descriptor->displayName);
+    name = buffer;
+  } else if(active && active->descriptor){
+    name = active->descriptor->displayName;
+  } else if(lastPairedModule && lastPairedModule->descriptor){
+    name = lastPairedModule->descriptor->displayName;
+  }
+  int16_t textWidth = oled.getUTF8Width(name);
+  if(textWidth > nameAreaWidth - 2){
+    size_t len = strlen(name);
+    while(len > 0){
+      strncpy(buffer, name, len);
+      buffer[len] = '\0';
+      int16_t candidateWidth = oled.getUTF8Width(buffer);
+      if(candidateWidth <= nameAreaWidth - 4){
+        name = buffer;
+        textWidth = candidateWidth;
+        break;
+      }
+      --len;
+    }
+    if(len == 0){
+      buffer[0] = '\0';
+      name = buffer;
+      textWidth = 0;
     }
   }
+  int16_t nameTextX = nameX + (nameAreaWidth - textWidth) / 2;
+  if(nameTextX < nameX + 1) nameTextX = nameX + 1;
+  int16_t textY = (kStatusBarHeight + kStatusFontHeight) / 2;
+  oled.setCursor(nameTextX, textY);
+  oled.print(name);
 }
 
 void drawDashboard(){
-  if(!discovery.hasPeers()){
-    drawConnectionLog();
-    return;
-  }
   ModuleState* active = getActiveModule();
   if(active && active->descriptor && active->descriptor->drawDashboard){
     active->descriptor->drawDashboard();
   } else {
-    drawGenericDashboard();
+    oled.clearBuffer();
+    oled.setFont(smallFont);
+    oled.setCursor(0, kStatusBarHeight + 12);
+    oled.print("No dashboard available");
   }
-  drawDashboardOverlays();
+  drawStatusBar();
   oled.sendBuffer();
 }
 

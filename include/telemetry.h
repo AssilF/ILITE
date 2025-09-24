@@ -42,10 +42,17 @@ struct BulkyCommand {
   uint8_t buttonStates[3];
 } __attribute__((packed));
 
+struct WifiControlCommand {
+  uint32_t magic;
+  uint8_t enableTelemetry;
+  uint8_t reserved[3];
+} __attribute__((packed));
+
 extern ThrustCommand emission;
 extern receptionDataPacket reception;
 extern TelemetryPacket telemetry;
 extern BulkyCommand bulkyCommand;
+extern WifiControlCommand wifiControlCommand;
 extern int16_t pidPitchHistory[screen_Width];
 extern int16_t pidRollHistory[screen_Width];
 extern int16_t pidYawHistory[screen_Width];
