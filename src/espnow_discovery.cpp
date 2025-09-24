@@ -1,6 +1,9 @@
 #include "espnow_discovery.h"
 #include "audio_feedback.h"
 #include "connection_log.h"
+#if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
+#include "display.h"
+#endif
 
 #include <cstdio>
 #include <cstring>
@@ -117,7 +120,11 @@ void EspNowDiscovery::discover() {
     pruneExpiredPeers(now);
 
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
-    if (now - lastBroadcastMs >= BROADCAST_INTERVAL_MS) {
+    bool shouldBroadcast = !link.paired;
+    if (!shouldBroadcast) {
+        shouldBroadcast = (displayMode == DISPLAY_MODE_PAIRING);
+    }
+    if (shouldBroadcast && now - lastBroadcastMs >= BROADCAST_INTERVAL_MS) {
         sendPacket(MessageType::MSG_PAIR_REQ, kBroadcastMac);
         lastBroadcastMs = now;
     }
