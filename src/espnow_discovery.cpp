@@ -1,6 +1,6 @@
 #include "espnow_discovery.h"
 #include "audio_feedback.h"
-#include "espnow_discovery.h" // Already present, but ensure Identity is in this header or include the correct header
+#include "connection_log.h"
 
 #include <cstdio>
 #include <cstring>
@@ -26,9 +26,17 @@ void EspNowDiscovery::begin() {
     if (chanResult != ESP_OK) {
         Serial.print("[ESP-NOW] Failed to set WiFi channel: ");
         Serial.println(chanResult);
+        connectionLogAddf("WiFi channel error: %d", chanResult);
     }
 
     fillSelfIdentity();
+    connectionLogAdd("ESP-NOW begin");
+#if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
+    connectionLogAdd("Role: controller");
+#else
+    connectionLogAdd("Role: controlled");
+#endif
+    connectionLogAddf("Identity: %s/%s", selfIdentity.customId, selfIdentity.deviceType);
 
     // Register the broadcast peer if it is not already present.
     if (!esp_now_is_peer_exist(kBroadcastMac)) {
@@ -92,6 +100,7 @@ void EspNowDiscovery::discover() {
         if (now - link.lastActivityMs > LINK_TIMEOUT_MS) {
             Serial.println("[ESP-NOW] Link timeout, resetting");
             resetLink();
+            connectionLogAdd("Link timeout, resetting");
         } else if (now - link.lastKeepAliveSentMs >= BROADCAST_INTERVAL_MS) {
             if (sendPacket(MessageType::MSG_KEEPALIVE, link.peerMac)) {
                 link.lastKeepAliveSentMs = now;
@@ -103,6 +112,7 @@ void EspNowDiscovery::discover() {
         if (now - link.lastActivityMs > LINK_TIMEOUT_MS) {
             Serial.println("[ESP-NOW] Controller timeout, resetting link");
             resetLink();
+            connectionLogAdd("Controller timeout, resetting link");
         } else if (now - link.lastKeepAliveSentMs >= BROADCAST_INTERVAL_MS) {
             if (sendPacket(MessageType::MSG_KEEPALIVE, link.peerMac)) {
                 link.lastKeepAliveSentMs = now;
@@ -129,6 +139,9 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
         case MessageType::MSG_PAIR_REQ:
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLED
             Serial.println("[ESP-NOW] Pair request received");
+            char pairLabel[24] = {};
+            macToString(mac, pairLabel, sizeof(pairLabel));
+            connectionLogAddf("Pair request from %s", pairLabel);
             upsertPeer(packet->id, mac, now);
             ensurePeer(mac);
             sendPacket(MessageType::MSG_IDENTITY_REPLY, mac);
@@ -144,6 +157,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
             upsertPeer(packet->id, mac, now);
             ensurePeer(mac);
             audioFeedback(AudioCue::PeerDiscovered);
+            connectionLogAddf("Identity reply: %s", packet->id.customId);
             return true;
 #else
             return false;
@@ -152,6 +166,9 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
         case MessageType::MSG_PAIR_CONFIRM:
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLED
             Serial.println("[ESP-NOW] Pair confirm received");
+            char confirmLabel[24] = {};
+            macToString(mac, confirmLabel, sizeof(confirmLabel));
+            connectionLogAddf("Pair confirm from %s", confirmLabel);
             ensurePeer(mac);
             int index = upsertPeer(packet->id, mac, now);
             if (index >= 0) {
@@ -164,6 +181,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                 peers[index].acked = true;
                 Serial.println("[ESP-NOW] Paired with controller");
                 audioFeedback(AudioCue::PeerAcknowledge);
+                connectionLogAddf("Paired with %s", packet->id.customId);
             }
             return true;
 #else
@@ -174,6 +192,8 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
             if (link.awaitingAck && macEqual(mac, link.peerMac)) {
                 Serial.println("[ESP-NOW] Pair ack received");
+                char ackLabel[24] = {};
+                macToString(mac, ackLabel, sizeof(ackLabel));
                 link.paired = true;
                 link.awaitingAck = false;
                 link.lastActivityMs = now;
@@ -185,6 +205,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                     peerCount = computePeerCount();
                 }
                 audioFeedback(AudioCue::PeerAcknowledge);
+                connectionLogAddf("Pair ack from %s", ackLabel);
                 return true;
             }
             return false;
@@ -202,6 +223,17 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                 return true;
             }
             return false;
+
+        case MessageType::MSG_COMMAND:
+            if (len >= static_cast<int>(sizeof(CommandPacket))) {
+                const CommandPacket* cmd = reinterpret_cast<const CommandPacket*>(incomingData);
+                char commandLabel[24] = {};
+                macToString(mac, commandLabel, sizeof(commandLabel));
+                connectionLogAddf("Command from %s: %s", commandLabel, cmd->command);
+            } else {
+                connectionLogAdd("Command packet truncated");
+            }
+            return true;
     }
 
     return false;
@@ -309,6 +341,7 @@ bool EspNowDiscovery::sendPacket(MessageType type, const uint8_t* mac) {
     if (err != ESP_OK) {
         Serial.print("[ESP-NOW] Send failed: ");
         Serial.println(err);
+        connectionLogAddf("Send failed (%u): %d", static_cast<unsigned>(type), err);
         return false;
     }
     return true;
@@ -325,6 +358,7 @@ int EspNowDiscovery::upsertPeer(const Identity& id, const uint8_t* mac, uint32_t
             memcpy(peers[i].mac, mac, 6);
             peers[i].lastSeen = now;
             peerCount = computePeerCount();
+            connectionLogAddf("Peer updated: %s", id.customId);
             return i;
         }
     }
@@ -344,11 +378,13 @@ int EspNowDiscovery::upsertPeer(const Identity& id, const uint8_t* mac, uint32_t
             Serial.print(id.customId);
             Serial.print(" @ ");
             Serial.println(label);
+            connectionLogAddf("Peer discovered: %s", id.customId);
             return i;
         }
     }
 
     Serial.println("[ESP-NOW] Peer table full");
+    connectionLogAdd("Peer table full");
     return -1;
 }
 
@@ -365,6 +401,7 @@ void EspNowDiscovery::pruneExpiredPeers(uint32_t now) {
             }
             peers[i] = PeerEntry{};
             changed = true;
+            connectionLogAddf("Peer stale: %s", label);
         }
     }
     if (changed) {
@@ -394,6 +431,7 @@ void EspNowDiscovery::resetLink() {
         peers[link.peerIndex].confirmed = false;
     }
     link = LinkState{};
+    connectionLogAdd("Link reset");
 }
 
 int EspNowDiscovery::computePeerCount() const {
@@ -404,4 +442,41 @@ int EspNowDiscovery::computePeerCount() const {
         }
     }
     return count;
+}
+
+bool EspNowDiscovery::sendCommand(const uint8_t* mac, const char* command) {
+    if (!mac || !command) {
+        return false;
+    }
+
+    CommandPacket packet{};
+    packet.header.version = kProtocolVersion;
+    packet.header.type = static_cast<uint8_t>(MessageType::MSG_COMMAND);
+    packet.header.id = selfIdentity;
+    WiFi.macAddress(packet.header.id.mac);
+    memcpy(selfIdentity.mac, packet.header.id.mac, sizeof(selfIdentity.mac));
+    packet.header.monotonicMs = millis();
+    memset(packet.header.reserved, 0, sizeof(packet.header.reserved));
+    strncpy(packet.command, command, sizeof(packet.command) - 1);
+    packet.command[sizeof(packet.command) - 1] = '\0';
+
+    if (!macEqual(mac, kBroadcastMac)) {
+        if (!ensurePeer(mac)) {
+            connectionLogAdd("Command target unavailable");
+            return false;
+        }
+    }
+
+    esp_err_t err = esp_now_send(mac, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+    if (err != ESP_OK) {
+        Serial.print("[ESP-NOW] Command send failed: ");
+        Serial.println(err);
+        connectionLogAddf("Command send failed: %d", err);
+        return false;
+    }
+
+    char label[24] = {};
+    macToString(mac, label, sizeof(label));
+    connectionLogAddf("Command sent to %s: %s", label, packet.command);
+    return true;
 }

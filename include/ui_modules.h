@@ -10,6 +10,8 @@ enum class PeerKind : uint8_t {
 
 struct ModuleState;
 
+constexpr size_t kMaxFunctionSlots = 3;
+
 struct FunctionActionOption {
   const char* name;
   const char* shortLabel;
@@ -31,8 +33,8 @@ struct ModuleDescriptor {
 struct ModuleState {
   const ModuleDescriptor* descriptor;
   bool wifiEnabled;
-  uint8_t assignedActions[3];
-  bool functionOutputs[3];
+  uint8_t assignedActions[kMaxFunctionSlots];
+  bool functionOutputs[kMaxFunctionSlots];
 };
 
 size_t getModuleStateCount();
