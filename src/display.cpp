@@ -446,6 +446,11 @@ void drawDrongazInterface(){
   oled.sendBuffer();
 }
 
+static void formatMotorPercent(float value, char* buffer, size_t size){
+  int percent = static_cast<int>(roundf(constrain(value, -1.f, 1.f) * 100.f));
+  snprintf(buffer, size, "%+d%%", percent);
+}
+
 void drawTelemetryInfo(){
   ModuleState* active = getActiveModule();
   if(active && active->descriptor->kind == PeerKind::Thegill){
@@ -857,10 +862,6 @@ static void drawMotorValue(int x, int y, const char* label, float actual, float 
   printMotorPercent(target);
 }
 
-static void formatMotorPercent(float value, char* buffer, size_t size){
-  int percent = static_cast<int>(roundf(constrain(value, -1.f, 1.f) * 100.f));
-  snprintf(buffer, size, "%+d%%", percent);
-}
 
 static void drawMotorBarLabels(int x, int y,
                                const char* frontLabel, float frontValue,
