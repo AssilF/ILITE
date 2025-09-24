@@ -21,6 +21,18 @@ extern int infoPeer;
 extern int gillConfigIndex;
 extern int globalMenuIndex;
 extern int dashboardFocusIndex;
+extern int logScrollOffset;
+
+constexpr byte DISPLAY_MODE_HOME = 0;
+constexpr byte DISPLAY_MODE_TELEMETRY = 1;
+constexpr byte DISPLAY_MODE_PID = 2;
+constexpr byte DISPLAY_MODE_ORIENTATION = 3;
+constexpr byte DISPLAY_MODE_PAIRING = 4;
+constexpr byte DISPLAY_MODE_DASHBOARD = 5;
+constexpr byte DISPLAY_MODE_ABOUT = 6;
+constexpr byte DISPLAY_MODE_PEER_INFO = 7;
+constexpr byte DISPLAY_MODE_GLOBAL_MENU = 8;
+constexpr byte DISPLAY_MODE_LOG = 9;
 
 extern byte batteryLevel;
 extern byte Front_Distance;
@@ -55,6 +67,7 @@ void drawDashboard();
 void drawThegillDashboard();
 void drawGenericDashboard();
 void drawBulkyDashboard();
+void drawConnectionLog();
 void drawAbout();
 void drawBootScreen();
 void drawThegillConfig();
