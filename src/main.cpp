@@ -841,7 +841,7 @@ void loop() {
         const uint8_t *mac = discovery.getPeer(infoPeer);
         memcpy(targetAddress, mac, 6);
         const char* peerName = discovery.getPeerName(infoPeer);
-        pairedIsBulky = strcmp(peerName, "Bulky") == 0;
+        pairedIsBulky = isNameBulky(peerName);
         pairedIsThegill = isNameThegill(peerName);
         if(pairedIsBulky){
           botMotionState = STOP;
