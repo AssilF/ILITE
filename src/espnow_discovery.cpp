@@ -530,3 +530,7 @@ bool EspNowDiscovery::sendCommand(const uint8_t* mac, const char* command) {
     connectionLogAddf("Command sent to %s: %s", label, packet.command);
     return true;
 }
+
+void EspNowDiscovery::resetLinkState() {
+    resetLink();
+}
