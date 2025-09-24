@@ -7,6 +7,14 @@
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 
+#define iconFont u8g2_font_open_iconic_all_2x_t
+#define networkBatteryIconFont u8g2_font_siji_t_6x10
+#define textFont u8g2_font_torussansbold8_8r
+#define smallFont u8g2_font_5x8_tf
+#define bootTitleFont u8g2_font_inb38_mr
+#define bootSubFont u8g2_font_6x13_tf
+#define smallIconFont u8g2_font_open_iconic_all_1x_t
+
 byte displayMode = 5;
 int homeMenuIndex = 0;
 bool homeSelected = false;
@@ -106,13 +114,7 @@ void drawThegillLayoutCard(const ModuleState& state, int16_t x, int16_t y, bool 
 #define iconFrameWidth iconWidth+2*iconClearance
 #define iconDeckx (displayWidth-(displayWidth/iconFrameWidth))/2
 
-#define iconFont u8g2_font_open_iconic_all_2x_t
-#define networkBatteryIconFont u8g2_font_siji_t_6x10
-#define textFont u8g2_font_torussansbold8_8r
-#define smallFont u8g2_font_5x8_tf
-#define bootTitleFont u8g2_font_inb38_mr
-#define bootSubFont u8g2_font_6x13_tf
-#define smallIconFont u8g2_font_open_iconic_all_1x_t
+
 
 #define compassIcon "\u0087"
 #define speedIcon "\u010d"

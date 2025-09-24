@@ -1,9 +1,11 @@
 #include "espnow_discovery.h"
 #include "audio_feedback.h"
+#include "espnow_discovery.h" // Already present, but ensure Identity is in this header or include the correct header
 
 #include <cstdio>
 #include <cstring>
 
+// Timeout for link inactivity in milliseconds
 namespace {
 
 constexpr uint8_t kBroadcastMac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -19,7 +21,8 @@ void logMac(const char* prefix, const uint8_t* mac) {
 
 void EspNowDiscovery::begin() {
     WiFi.mode(WIFI_AP_STA);
-    esp_err_t chanResult = esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_err_t chanResult = esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE); //we're not setting channels for now, let them play loose.
     if (chanResult != ESP_OK) {
         Serial.print("[ESP-NOW] Failed to set WiFi channel: ");
         Serial.println(chanResult);

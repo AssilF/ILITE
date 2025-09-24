@@ -28,8 +28,8 @@
 // ESP-NOW discovery and pairing parameters.
 static constexpr uint8_t WIFI_CHANNEL = 6;
 static constexpr uint32_t BROADCAST_INTERVAL_MS = 1000;
-static constexpr uint32_t DEVICE_TTL_MS = 10'000;
-static constexpr uint32_t LINK_TIMEOUT_MS = 5'000;
+static constexpr uint32_t DEVICE_TTL_MS = 10000;
+static constexpr uint32_t LINK_TIMEOUT_MS = 5000;
 
 // -----------------------------------------------------------------------------
 // Identity & packet layout
