@@ -107,7 +107,7 @@ void EspNowDiscovery::begin() {
     Serial.println("controlled");
 #endif
 
-    char idString[64] = {};
+    char idString[32] = {};
     snprintf(idString, sizeof(idString), "%s/%s (%s)", selfIdentity.customId,
              selfIdentity.platform, selfIdentity.deviceType);
     Serial.print("[ESP-NOW] Identity: ");
@@ -167,18 +167,19 @@ void EspNowDiscovery::discover() {
 }
 
 bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incomingData, int len) {
+
+    const Packet* packet = reinterpret_cast<const Packet*>(incomingData);
+    uint32_t now = millis();
+    MessageType type = packet->type;
+    logRx(type, mac);
+
     if (len < static_cast<int>(sizeof(Packet))) {
         return false;
     }
 
-    const Packet* packet = reinterpret_cast<const Packet*>(incomingData);
     if (packet->version != kProtocolVersion) {
         return false;
     }
-
-    uint32_t now = millis();
-    MessageType type = static_cast<MessageType>(packet->type);
-    logRx(type, mac);
 
     switch (type) {
         case MessageType::MSG_PAIR_REQ:
@@ -371,12 +372,12 @@ bool EspNowDiscovery::sendPacket(MessageType type, const uint8_t* mac) {
 
     Packet packet{};
     packet.version = kProtocolVersion;
-    packet.type = static_cast<uint8_t>(type);
+    packet.type = type;
     packet.id = selfIdentity;
     WiFi.macAddress(packet.id.mac);
     memcpy(selfIdentity.mac, packet.id.mac, sizeof(selfIdentity.mac));
     packet.monotonicMs = millis();
-    memset(packet.reserved, 0, sizeof(packet.reserved));
+    memset(&packet.reserved, 0, sizeof(packet.reserved));
 
     if (!macEqual(mac, kBroadcastMac)) {
         if (!ensurePeer(mac)) {
@@ -499,12 +500,12 @@ bool EspNowDiscovery::sendCommand(const uint8_t* mac, const char* command) {
 
     CommandPacket packet{};
     packet.header.version = kProtocolVersion;
-    packet.header.type = static_cast<uint8_t>(MessageType::MSG_COMMAND);
+    packet.header.type = MessageType::MSG_COMMAND;
     packet.header.id = selfIdentity;
     WiFi.macAddress(packet.header.id.mac);
     memcpy(selfIdentity.mac, packet.header.id.mac, sizeof(selfIdentity.mac));
     packet.header.monotonicMs = millis();
-    memset(packet.header.reserved, 0, sizeof(packet.header.reserved));
+    memset(&packet.header.reserved, 0, sizeof(packet.header.reserved));
     strncpy(packet.command, command, sizeof(packet.command) - 1);
     packet.command[sizeof(packet.command) - 1] = '\0';
 

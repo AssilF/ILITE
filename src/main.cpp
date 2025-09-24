@@ -206,17 +206,17 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  debug("Data received: ");
-  debug(len);
-  debug(" bytes\n");
+  // debug("Data received: ");
+  // debug(len);
+  // debug(" bytes\n");
   // Ignore any frames from the universal broadcast address to prevent
   // pairing with ourselves when our own discovery packets are received.
-  if (memcmp(mac, broadcastAddress, 6) == 0) {
-    debug("Ignoring broadcast frame\n");
-    return;
-  }
-
+  // if (memcmp(mac, broadcastAddress, 6) == 0) {
+  //   debug("Ignoring broadcast frame\n");
+  //   return;
+  // }
   // Let the discovery helper consume any handshake packets.
+  connectionLogAddf("RX module payload (%d bytes)", len);
   if (discovery.handleIncoming(mac, incomingData, len)) {
     debug("Discovery handshake\n");
     // Remember the sender as the current target once paired.
@@ -254,7 +254,6 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     dashboardFocusIndex = 0;
     logScrollOffset = 0;
     audioFeedback(AudioCue::PeerDiscovered);
-    return;
   }
 
   // Copy telemetry data from the incoming packet. The drone is expected to
@@ -270,7 +269,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
       handleGenericIncoming(*active, incomingData, static_cast<size_t>(len));
     }
   }
-  connectionLogAddf("RX module payload (%d bytes)", len);
+  
   lastReceiveTime = millis();
   connected = true;
 
@@ -870,10 +869,10 @@ void commTask(void* pvParameters){
     if(payload && payloadSize > 0){
       if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
         sent_Status = true;
-        connectionLogAddf("TX module payload (%u bytes)", static_cast<unsigned>(payloadSize));
+        // connectionLogAddf("TX payload (%u bytes)", static_cast<unsigned>(payloadSize));
       }else{
         sent_Status = false;
-        connectionLogAddf("Module payload send failed (%u bytes)", static_cast<unsigned>(payloadSize));
+        connectionLogAddf("payload  failed (%u bytes)", static_cast<unsigned>(payloadSize));
       }
     }
     vTaskDelay(delay);
@@ -941,8 +940,8 @@ void setup() {
   while(1){oled.drawStr(0,15,"ESPNOW FAILED :(");  oled.sendBuffer(); delay(5000);}
   }debug("\n\nespnow initialized\n")
 
-
   esp_now_register_send_cb(OnDataSent); debug("sending callback set \n \n")//Sent Callback Function associated
+  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated
 
   // memcpy(bot.peer_addr, targetAddress, 6); //putting the bot ID card into memory ;)
   // bot.channel = 0;     
@@ -952,8 +951,6 @@ void setup() {
   // debug("What the bot doin ?");
   // while(1){oled.drawStr(0,15,"someting wong wit ya bot ID");  oled.sendBuffer();delay(5000);}
   // }debug("peer added \n")
-
-  esp_now_register_recv_cb(OnDataRecv); debug("reception callback set \n \n")//Recv Callback Function associated
 
   oled.clear();
   oled.sendBuffer();

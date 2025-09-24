@@ -54,10 +54,10 @@ enum class MessageType : uint8_t {
 
 struct Packet {
     uint8_t version;
-    uint8_t type;
+    MessageType type;
     Identity id;
     uint32_t monotonicMs;
-    uint8_t reserved[8];
+    uint32_t reserved;
 };
 
 struct CommandPacket {
