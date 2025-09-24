@@ -48,7 +48,6 @@ enum class MessageType : uint8_t {
     MSG_IDENTITY_REPLY = 0x02,
     MSG_PAIR_CONFIRM = 0x03,
     MSG_PAIR_ACK = 0x04,
-    MSG_KEEPALIVE = 0x05,
     MSG_COMMAND = 0x06,
 };
 
@@ -103,7 +102,6 @@ private:
         int peerIndex = -1;
         uint8_t peerMac[6] = {};
         uint32_t lastActivityMs = 0;
-        uint32_t lastKeepAliveSentMs = 0;
         uint32_t lastConfirmSentMs = 0;
         bool awaitingAck = false;
     };
