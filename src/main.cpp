@@ -991,15 +991,10 @@ void commTask(void* pvParameters){
     const uint8_t* payload = nullptr;
     size_t payloadSize = 0;
     ModuleState* active = getActiveModule();
-    if(controlSessionActive && active && active->wifiEnabled){
-      if(active->descriptor->updateControl){
         active->descriptor->updateControl();
-      }
-      if(active->descriptor->preparePayload){
         payload = active->descriptor->preparePayload(payloadSize);
-      }
-    }
-    if(controlSessionActive && payload && payloadSize > 0){
+      
+    if( payload && payloadSize > 0){
       if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
         sent_Status = true;
         // connectionLogAddf("TX payload (%u bytes)", static_cast<unsigned>(payloadSize));
@@ -1008,14 +1003,11 @@ void commTask(void* pvParameters){
         connectionLogAddf("payload  failed (%u bytes)", static_cast<unsigned>(payloadSize));
       }
     }
-    if(wifiCommandPending && connected){
-      if(esp_now_send(wifiCommandTarget, reinterpret_cast<uint8_t*>(&wifiControlCommand), sizeof(wifiControlCommand)) == ESP_OK){
-        wifiCommandPending = false;
-      }
-    }
-    vTaskDelay(delay);
   }
-}
+        vTaskDelay(delay);
+    }
+
+
 
 void setup() {
 
