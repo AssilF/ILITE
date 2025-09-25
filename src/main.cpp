@@ -208,6 +208,7 @@ static float readJoystickAxis(uint8_t pin, size_t index){
 static void handleGenericIncoming(ModuleState& state, const uint8_t* data, size_t length);
 static void handleBulkyIncoming(ModuleState& state, const uint8_t* data, size_t length);
 static void handleGillIncoming(ModuleState& state, const uint8_t* data, size_t length);
+static void sendInitialControlPacket(ModuleState* module, const uint8_t* mac);
 
 //Coms Fcns
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
@@ -231,10 +232,12 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   bool handshake = discovery.handleIncoming(mac, incomingData, len);
   if (handshake) {
     debug("Discovery handshake\n");
+    ModuleState* module = nullptr;
+    const char* peerName = nullptr;
     int peerIndex = discovery.findPeerIndex(mac);
     if(peerIndex >= 0){
-      const char* peerName = discovery.getPeerName(peerIndex);
-      ModuleState* module = findModuleByName(peerName);
+      peerName = discovery.getPeerName(peerIndex);
+      module = findModuleByName(peerName);
       if(module){
         lastPairedModule = module;
         if(autoDashboardEnabled && controlSessionActive){
@@ -261,11 +264,16 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
             break;
         }
       }
-      connectionLogAddf("Active peer: %s", peerName);
+      if(peerName){
+        connectionLogAddf("Active peer: %s", peerName);
+      }
     }
     if(controlSessionActive && EspNowDiscovery::macEqual(mac, targetAddress)){
       lastReceiveTime = millis();
       connected = true;
+      if(module){
+        sendInitialControlPacket(module, mac);
+      }
     }
     return;
   }
@@ -552,6 +560,32 @@ static const uint8_t* prepareBulkyPayload(size_t& size){
 static const uint8_t* prepareThegillPayload(size_t& size){
   size = sizeof(thegillCommand);
   return reinterpret_cast<const uint8_t*>(&thegillCommand);
+}
+
+static void sendInitialControlPacket(ModuleState* module, const uint8_t* mac){
+  if(!module || !module->descriptor || !mac){
+    return;
+  }
+  if(!module->wifiEnabled){
+    return;
+  }
+  if(module->descriptor->updateControl){
+    module->descriptor->updateControl();
+  }
+  size_t payloadSize = 0;
+  const uint8_t* payload = nullptr;
+  if(module->descriptor->preparePayload){
+    payload = module->descriptor->preparePayload(payloadSize);
+  }
+  if(!payload || payloadSize == 0){
+    return;
+  }
+  esp_err_t result = esp_now_send(mac, payload, payloadSize);
+  if(result == ESP_OK){
+    connectionLogAddf("Initial control TX (%u bytes)", static_cast<unsigned>(payloadSize));
+  } else {
+    connectionLogAddf("Initial control send failed: %d", static_cast<int>(result));
+  }
 }
 
 static void handleGenericIncoming(ModuleState& state, const uint8_t* data, size_t length){
@@ -1374,6 +1408,9 @@ void loop() {
         } else if(module && module->descriptor->kind == PeerKind::Thegill){
           resetThegillState();
           gillConfigIndex = 0;
+        }
+        if(module){
+          sendInitialControlPacket(module, targetAddress);
         }
         displayMode = DISPLAY_MODE_DASHBOARD;
         dashboardFocusIndex = 0;
