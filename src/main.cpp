@@ -979,7 +979,7 @@ static void actionToggleGillMode(ModuleState& state, size_t slot){
 static void actionCycleGillEasing(ModuleState& state, size_t slot){
   (void)state;
   (void)slot;
-  int next = (static_cast<int>(thegillConfig.easing) + 1) % 5;
+  int next = (static_cast<int>(thegillConfig.easing) + 1) % static_cast<int>(kGillEasingCount);
   thegillConfig.easing = static_cast<GillEasing>(next);
   thegillCommand.easing = thegillConfig.easing;
   audioFeedback(AudioCue::Scroll);
@@ -1452,6 +1452,11 @@ void loop() {
           }
         }
       }
+    } else if(displayMode == DISPLAY_MODE_LOG){
+      displayMode = DISPLAY_MODE_HOME;
+      autoDashboardEnabled = true;
+      homeMenuIndex = 0;
+      audioFeedback(AudioCue::Back);
     } else if(displayMode == DISPLAY_MODE_HOME){
       if(homeMenuIndex == 0){
         autoDashboardEnabled = true;
