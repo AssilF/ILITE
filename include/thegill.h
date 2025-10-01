@@ -12,12 +12,17 @@ enum class GillMode : uint8_t {
 
 // Available easing curves that shape motor ramp behaviour.
 enum class GillEasing : uint8_t {
-  Linear = 0,
+  None = 0,
+  Linear,
   EaseIn,
   EaseOut,
   EaseInOut,
   Sine,
 };
+
+constexpr uint8_t kGillEasingCount = static_cast<uint8_t>(GillEasing::Sine) + 1;
+
+constexpr GillEasing kDefaultGillEasing = GillEasing::None;
 
 constexpr uint8_t GILL_FLAG_BRAKE = 0x01;
 constexpr uint8_t GILL_FLAG_HONK  = 0x02;

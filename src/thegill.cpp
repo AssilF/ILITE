@@ -6,14 +6,14 @@ ThegillCommand thegillCommand{
   0, 0, 0, 0,
   4.0f,
   GillMode::Default,
-  GillEasing::EaseInOut,
+  kDefaultGillEasing,
   0,
   0
 };
 
 ThegillConfig thegillConfig{
   GillMode::Default,
-  GillEasing::EaseInOut
+  kDefaultGillEasing
 };
 
 ThegillRuntime thegillRuntime{
@@ -40,6 +40,8 @@ float applyEasingCurve(GillEasing mode, float t){
   if(t <= 0.f) return 0.f;
   if(t >= 1.f) return 1.f;
   switch(mode){
+    case GillEasing::None:
+      return 1.f;
     case GillEasing::Linear:
       return t;
     case GillEasing::EaseIn:

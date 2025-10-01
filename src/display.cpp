@@ -208,6 +208,7 @@ static const char* modeToString(GillMode mode){
 
 static const char* easingToString(GillEasing easing){
   switch(easing){
+    case GillEasing::None: return "None";
     case GillEasing::Linear: return "Linear";
     case GillEasing::EaseIn: return "Ease In";
     case GillEasing::EaseOut: return "Ease Out";
