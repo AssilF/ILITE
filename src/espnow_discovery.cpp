@@ -100,6 +100,7 @@ void EspNowDiscovery::begin() {
     peerCount = 0;
     link = LinkState{};
     lastBroadcastMs = 0;
+    discoveryEnabled = true;
 
     Serial.print("[ESP-NOW] Role: ");
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
@@ -120,32 +121,27 @@ void EspNowDiscovery::discover() {
     pruneExpiredPeers(now);
 
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
-    bool shouldBroadcast = !link.paired;
-    if (!shouldBroadcast) {
-        shouldBroadcast = (displayMode == DISPLAY_MODE_PAIRING);
-    }
+    bool pairingMenuActive = (displayMode == DISPLAY_MODE_PAIRING);
+    bool pairingInfoActive = (displayMode == DISPLAY_MODE_PEER_INFO);
+    bool pairingFlowActive = pairingMenuActive || pairingInfoActive;
+    bool allowBroadcast = discoveryEnabled || pairingMenuActive;
+    bool shouldBroadcast = allowBroadcast && !link.paired;
     if (shouldBroadcast && now - lastBroadcastMs >= BROADCAST_INTERVAL_MS) {
         sendPacket(MessageType::MSG_PAIR_REQ, kBroadcastMac);
         lastBroadcastMs = now;
     }
 
-    if (!link.paired) {
+    bool autoPairEnabled = discoveryEnabled && !pairingFlowActive;
+    if (autoPairEnabled && !link.paired) {
         int targetIndex = selectTarget();
         if (targetIndex >= 0) {
             PeerEntry& target = peers[targetIndex];
-            if (!target.confirmed || now - link.lastConfirmSentMs >= BROADCAST_INTERVAL_MS) {
-                if (sendPacket(MessageType::MSG_PAIR_CONFIRM, target.mac)) {
-                    target.confirmed = true;
-                    link.peerIndex = targetIndex;
-                    link.awaitingAck = true;
-                    link.lastConfirmSentMs = now;
-                    memcpy(link.peerMac, target.mac, sizeof(link.peerMac));
-                    Serial.print("[ESP-NOW] Sent confirm to ");
-                    logMac("", target.mac);
-                }
+            bool shouldConfirm = !target.confirmed || now - link.lastConfirmSentMs >= BROADCAST_INTERVAL_MS;
+            if (shouldConfirm) {
+                beginPairingWith(target.mac);
             }
         }
-    } else {
+    } else if (link.paired) {
         if (now - link.lastActivityMs > LINK_TIMEOUT_MS) {
             Serial.println("[ESP-NOW] Link timeout, resetting");
             resetLink();
@@ -189,6 +185,10 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
     switch (type) {
         case MessageType::MSG_PAIR_REQ:
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLED
+            if (link.paired) {
+                connectionLogAdd("Ignoring pair request while paired");
+                return true;
+            }
             Serial.println("[ESP-NOW] Pair request received");
             char pairLabel[24] = {};
             macToString(mac, pairLabel, sizeof(pairLabel));
@@ -255,6 +255,7 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                     peers[index].lastSeen = now;
                     peerCount = computePeerCount();
                 }
+                discoveryEnabled = false;
                 audioFeedback(AudioCue::PeerAcknowledge);
                 connectionLogAddf("Pair ack from %s", ackLabel);
                 return true;
@@ -270,6 +271,12 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                 char commandLabel[24] = {};
                 macToString(mac, commandLabel, sizeof(commandLabel));
                 connectionLogAddf("Command from %s: %s", commandLabel, cmd->command);
+                if (commandCallback) {
+                    char message[sizeof(cmd->command) + 1];
+                    memcpy(message, cmd->command, sizeof(cmd->command));
+                    message[sizeof(cmd->command)] = '\0';
+                    commandCallback(message);
+                }
             } else {
                 connectionLogAdd("Command packet truncated");
             }
@@ -472,6 +479,8 @@ void EspNowDiscovery::resetLink() {
         peers[link.peerIndex].confirmed = false;
     }
     link = LinkState{};
+    discoveryEnabled = true;
+    lastBroadcastMs = 0;
     connectionLogAdd("Link reset");
 }
 
@@ -525,4 +534,75 @@ bool EspNowDiscovery::sendCommand(const uint8_t* mac, const char* command) {
 
 void EspNowDiscovery::resetLinkState() {
     resetLink();
+}
+
+bool EspNowDiscovery::isPaired() const {
+    return link.paired;
+}
+
+int EspNowDiscovery::getPairedPeerIndex() const {
+    return link.paired ? link.peerIndex : -1;
+}
+
+const uint8_t* EspNowDiscovery::getPairedMac() const {
+    return link.paired ? link.peerMac : nullptr;
+}
+
+const Identity* EspNowDiscovery::getPairedIdentity() const {
+    if (!link.paired || link.peerIndex < 0 || link.peerIndex >= kMaxPeers) {
+        return nullptr;
+    }
+    const PeerEntry& entry = peers[link.peerIndex];
+    if (!entry.inUse) {
+        return nullptr;
+    }
+    return &entry.identity;
+}
+
+void EspNowDiscovery::setDiscoveryEnabled(bool enabled) {
+    discoveryEnabled = enabled;
+    if (enabled && !link.paired) {
+        lastBroadcastMs = 0;
+    }
+}
+
+bool EspNowDiscovery::isDiscoveryEnabled() const {
+    return discoveryEnabled;
+}
+
+void EspNowDiscovery::setCommandCallback(void (*callback)(const char* message)) {
+    commandCallback = callback;
+}
+
+bool EspNowDiscovery::beginPairingWith(const uint8_t* mac) {
+    if (!mac) {
+        return false;
+    }
+    int index = findPeerIndex(mac);
+    if (index < 0) {
+        return false;
+    }
+    if (link.paired && macEqual(mac, link.peerMac)) {
+        return true;
+    }
+    if (link.paired && !macEqual(mac, link.peerMac)) {
+        resetLink();
+    }
+    if (!ensurePeer(mac)) {
+        return false;
+    }
+    uint32_t now = millis();
+    if (sendPacket(MessageType::MSG_PAIR_CONFIRM, mac)) {
+        peers[index].confirmed = true;
+        peers[index].acked = false;
+        link.peerIndex = index;
+        link.awaitingAck = true;
+        link.lastConfirmSentMs = now;
+        memcpy(link.peerMac, mac, sizeof(link.peerMac));
+        Serial.print("[ESP-NOW] Sent confirm to ");
+        logMac("", mac);
+        connectionLogAddf("Pair confirm -> %s", peers[index].identity.customId);
+        return true;
+    }
+    return false;
 }

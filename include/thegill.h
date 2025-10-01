@@ -54,9 +54,27 @@ struct ThegillRuntime {
   bool honkActive;
 };
 
+struct ThegillTelemetryPacket {
+  uint32_t magic;
+  float pitch;
+  float roll;
+  float yaw;
+  float pitchCorrection;
+  float rollCorrection;
+  float yawCorrection;
+  uint16_t throttle;
+  int8_t pitchCommand;
+  int8_t rollCommand;
+  int8_t yawCommand;
+  float altitude;
+  float verticalAcc;
+  uint32_t commandAge;
+} __attribute__((packed));
+
 extern ThegillCommand thegillCommand;
 extern ThegillConfig thegillConfig;
 extern ThegillRuntime thegillRuntime;
+extern ThegillTelemetryPacket thegillTelemetryPacket;
 
 float applyEasingCurve(GillEasing mode, float t);
 

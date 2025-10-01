@@ -27,6 +27,9 @@
 #define verboseON
 #endif
 
+// Number of menu lines visible in global menu
+constexpr int kGlobalMenuVisibleLines = 5;
+
 // WiFi credentials used for OTA updates. Replace with actual network values.
 const char* ssid = "ILITE PORT";
 const char* password = "ASCE321#";
@@ -59,6 +62,18 @@ byte logReturnMode = DISPLAY_MODE_HOME;
 bool botmode=0;
 bool lastbtn;
 bool btnmode = false;
+
+constexpr float PID_FINE_STEPS[3] = {0.05f, 0.01f, 0.01f};
+constexpr float PID_COARSE_STEPS[3] = {0.50f, 0.10f, 0.10f};
+constexpr float PID_GAIN_MAX[3] = {20.0f, 5.0f, 5.0f};
+PidGains pidGains[PID_AXIS_COUNT] = {};
+bool pidGainsValid[PID_AXIS_COUNT] = {false, false, false};
+int pidTunerAxisIndex = 0;
+uint8_t pidFocusIndex = 0;
+bool pidCoarseMode = false;
+static const char* kAxisCommandNames[PID_AXIS_COUNT] = {"pitch", "roll", "yaw"};
+static const uint8_t kAxisMaskBits[PID_AXIS_COUNT] = {0x02, 0x01, 0x04};
+
 
 
 
@@ -208,6 +223,11 @@ static float readJoystickAxis(uint8_t pin, size_t index){
 static void handleGenericIncoming(ModuleState& state, const uint8_t* data, size_t length);
 static void handleBulkyIncoming(ModuleState& state, const uint8_t* data, size_t length);
 static void handleGillIncoming(ModuleState& state, const uint8_t* data, size_t length);
+static bool sendDroneCommand(const char* fmt, ...);
+static void handleDroneCommandMessage(const char* message);
+static void sendPidGainsToDrone(int axisIndex);
+static void adjustPidGain(int axisIndex, int paramIndex, int delta);
+static int axisNameToIndex(const char* name);
 
 //Coms Fcns
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
@@ -565,6 +585,8 @@ static void handleGenericIncoming(ModuleState& state, const uint8_t* data, size_
     uint8_t* dest = reinterpret_cast<uint8_t*>(&telemetry);
     memset(dest + copySize, 0, sizeof(telemetry) - copySize);
   }
+  droneStabilizationMask = telemetry.stabilizationMask;
+  droneStabilizationGlobal = (telemetry.stabilizationMask & STABILIZATION_GLOBAL_BIT) != 0;
 }
 
 static void handleBulkyIncoming(ModuleState& state, const uint8_t* data, size_t length){
@@ -585,6 +607,96 @@ static void handleGillIncoming(ModuleState& state, const uint8_t* data, size_t l
   (void)state;
   (void)data;
   (void)length;
+}
+
+static int axisNameToIndex(const char* name){
+  if(!name) return -1;
+  if(strcasecmp(name, "pitch") == 0) return 0;
+  if(strcasecmp(name, "roll") == 0) return 1;
+  if(strcasecmp(name, "yaw") == 0) return 2;
+  return -1;
+}
+
+static bool sendDroneCommand(const char* fmt, ...){
+  if(!controlSessionActive){
+    connectionLogAdd("Command not sent: no active session");
+    return false;
+  }
+  if(memcmp(targetAddress, broadcastAddress, sizeof(targetAddress)) == 0){
+    connectionLogAdd("Command not sent: unknown target");
+    return false;
+  }
+  char buffer[48];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  buffer[sizeof(buffer) - 1] = ' ';
+  if(buffer[0] == ' '){
+    return false;
+  }
+  if(!discovery.sendCommand(targetAddress, buffer)){
+    connectionLogAddf("Command send failed: %s", buffer);
+    audioFeedback(AudioCue::Error);
+    return false;
+  }
+  connectionLogAddf("Command sent: %s", buffer);
+  return true;
+}
+
+static void sendPidGainsToDrone(int axisIndex){
+  if(axisIndex < 0 || axisIndex >= PID_AXIS_COUNT) return;
+  const PidGains& gains = pidGains[axisIndex];
+  sendDroneCommand("pid set %s %.3f %.3f %.3f", kAxisCommandNames[axisIndex], gains.kp, gains.ki, gains.kd);
+}
+
+static void adjustPidGain(int axisIndex, int paramIndex, int delta){
+  if(axisIndex < 0 || axisIndex >= PID_AXIS_COUNT) return;
+  if(paramIndex < 0 || paramIndex > 2) return;
+  PidGains& gains = pidGains[axisIndex];
+  float* value = (paramIndex == 0) ? &gains.kp : (paramIndex == 1) ? &gains.ki : &gains.kd;
+  if(!pidGainsValid[axisIndex]){
+    *value = 0.0f;
+  }
+  float step = (pidCoarseMode ? PID_COARSE_STEPS[paramIndex] : PID_FINE_STEPS[paramIndex]) * static_cast<float>(delta);
+  *value += step;
+  if(*value < 0.0f) *value = 0.0f;
+  if(*value > PID_GAIN_MAX[paramIndex]) *value = PID_GAIN_MAX[paramIndex];
+  pidGainsValid[axisIndex] = true;
+  sendPidGainsToDrone(axisIndex);
+}
+
+static void handleDroneCommandMessage(const char* message){
+  if(!message) return;
+  if(strncmp(message, "PID ", 4) == 0){
+    char axisName[16] = {0};
+    float kp = 0.0f;
+    float ki = 0.0f;
+    float kd = 0.0f;
+    if(sscanf(message, "PID %15[^:]: Kp=%f Ki=%f Kd=%f", axisName, &kp, &ki, &kd) == 4){
+      int axisIndex = axisNameToIndex(axisName);
+      if(axisIndex >= 0 && axisIndex < PID_AXIS_COUNT){
+        pidGains[axisIndex].kp = kp;
+        pidGains[axisIndex].ki = ki;
+        pidGains[axisIndex].kd = kd;
+        pidGainsValid[axisIndex] = true;
+      }
+    }
+  }
+}
+
+static void requestPidGains(){
+  sendDroneCommand("pid show");
+  sendDroneCommand("stabilization status");
+}
+
+static void toggleAxisStabilization(int axisIndex){
+  if(axisIndex < 0 || axisIndex >= PID_AXIS_COUNT) return;
+  bool enabled = (droneStabilizationMask & kAxisMaskBits[axisIndex]) != 0;
+  bool enable = !enabled;
+  if(sendDroneCommand("stabilization axis %s %s", kAxisCommandNames[axisIndex], enable ? "on" : "off")) {
+    audioFeedback(enable ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+  }
 }
 
 static void actionToggleArm(ModuleState& state, size_t slot);
@@ -781,6 +893,7 @@ int buildGlobalMenuEntries(MenuEntry* entries, int maxEntries){
   };
 
   pushEntry("Dashboards", GlobalMenuAction::Dashboards);
+  pushEntry("Home", GlobalMenuAction::Home);
   pushEntry("Pairing", GlobalMenuAction::Pairing);
   pushEntry("Log", GlobalMenuAction::Log);
   pushEntry("Configurations", GlobalMenuAction::Configurations);
@@ -824,11 +937,14 @@ static void actionTogglePrecision(ModuleState& state, size_t slot){
 static void actionOpenPidSettings(ModuleState& state, size_t slot){
   (void)slot;
   displayMode = DISPLAY_MODE_PID;
-  pidGraphIndex = 0;
+  pidTunerAxisIndex = 0;
+  pidFocusIndex = 0;
+  pidCoarseMode = false;
   setFunctionOutput(state, slot, false);
   genericConfigActive = false;
   genericConfigIndex = 0;
   audioFeedback(AudioCue::Select);
+  requestPidGains();
 }
 
 static void actionToggleBulkyHonk(ModuleState& state, size_t slot){
@@ -913,6 +1029,7 @@ static void processFunctionKeys(){
             displayMode = DISPLAY_MODE_PAIRING;
             selectedPeer = 0;
             lastDiscoveryTime = millis();
+            discovery.setDiscoveryEnabled(true);
             discovery.discover();
             audioFeedback(AudioCue::Select);
             break;
@@ -921,6 +1038,32 @@ static void processFunctionKeys(){
             connectionLogClear();
             logScrollOffset = 0;
             audioFeedback(AudioCue::Select);
+            break;
+        }
+      } else if(!pressed){
+        functionButtonLatch[slot] = false;
+      }
+    }
+    return;
+  }
+  if(displayMode == DISPLAY_MODE_PID){
+    for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
+      bool pressed = digitalRead(pins[slot]) == LOW;
+      if(pressed && !functionButtonLatch[slot]){
+        functionButtonLatch[slot] = true;
+        switch(slot){
+          case 0:
+            toggleAxisStabilization(pidTunerAxisIndex);
+            break;
+          case 1:
+            pidCoarseMode = !pidCoarseMode;
+            audioFeedback(pidCoarseMode ? AudioCue::ToggleOn : AudioCue::ToggleOff);
+            break;
+          case 2:
+          default:
+            displayMode = DISPLAY_MODE_HOME;
+            homeMenuIndex = 0;
+            audioFeedback(AudioCue::Back);
             break;
         }
       } else if(!pressed){
@@ -991,21 +1134,28 @@ void commTask(void* pvParameters){
     const uint8_t* payload = nullptr;
     size_t payloadSize = 0;
     ModuleState* active = getActiveModule();
+    if(active && active->descriptor){
+      if(active->descriptor->updateControl){
         active->descriptor->updateControl();
+      }
+      if(active->descriptor->preparePayload){
         payload = active->descriptor->preparePayload(payloadSize);
-      
-    if( payload && payloadSize > 0){
-      if(esp_now_send(targetAddress, payload, payloadSize)==ESP_OK){
+      }
+    }
+
+    if(payload && payloadSize > 0){
+      if(esp_now_send(targetAddress, payload, payloadSize) == ESP_OK){
         sent_Status = true;
         // connectionLogAddf("TX payload (%u bytes)", static_cast<unsigned>(payloadSize));
-      }else{
+      } else {
         sent_Status = false;
         connectionLogAddf("payload  failed (%u bytes)", static_cast<unsigned>(payloadSize));
       }
     }
+
+    vTaskDelay(delay);
   }
-        vTaskDelay(delay);
-    }
+}
 
 
 
@@ -1089,6 +1239,7 @@ void setup() {
   oled.sendBuffer();
   delay(1000);debug("Coms in place\n\n")
   discovery.begin();
+  discovery.setCommandCallback(handleDroneCommandMessage);
   // Re-enable Soft AP in case discovery initialization resets WiFi.
   WiFi.softAP(ssid, password);
   discovery.discover();
@@ -1205,10 +1356,20 @@ void loop() {
     }
   } else if(displayMode == DISPLAY_MODE_PID){
     if(delta != 0){
-      pidGraphIndex = (pidGraphIndex + delta) % 3;
-      if(pidGraphIndex < 0) pidGraphIndex += 3;
+      if(pidFocusIndex == PID_FOCUS_AXIS){
+        const int axisCount = PID_AXIS_COUNT;
+        pidTunerAxisIndex = (pidTunerAxisIndex + delta) % axisCount;
+        if(pidTunerAxisIndex < 0) pidTunerAxisIndex += axisCount;
+        audioFeedback(AudioCue::Scroll);
+      } else if(pidFocusIndex >= PID_FOCUS_KP && pidFocusIndex <= PID_FOCUS_KD){
+        adjustPidGain(pidTunerAxisIndex, pidFocusIndex - PID_FOCUS_KP, delta);
+        audioFeedback(AudioCue::Scroll);
+      } else if(pidFocusIndex == PID_FOCUS_STEP){
+        if(delta > 0) pidCoarseMode = true;
+        else if(delta < 0) pidCoarseMode = false;
+        audioFeedback(AudioCue::Scroll);
+      }
       lastEncoderCount = encoderCount;
-      audioFeedback(AudioCue::Scroll);
     }
   } else if(displayMode == DISPLAY_MODE_PAIRING){
     int count = discovery.getPeerCount() + 1;
@@ -1247,6 +1408,15 @@ void loop() {
     if(delta != 0){
       globalMenuIndex = (globalMenuIndex + delta) % entryCount;
       if(globalMenuIndex < 0) globalMenuIndex += entryCount;
+      int maxOffset = entryCount - kGlobalMenuVisibleLines;
+      if(maxOffset < 0) maxOffset = 0;
+      if(globalMenuScrollOffset > maxOffset) globalMenuScrollOffset = maxOffset;
+      if(globalMenuIndex < globalMenuScrollOffset){
+        globalMenuScrollOffset = globalMenuIndex;
+      } else if(globalMenuIndex >= globalMenuScrollOffset + kGlobalMenuVisibleLines){
+        globalMenuScrollOffset = globalMenuIndex - kGlobalMenuVisibleLines + 1;
+        if(globalMenuScrollOffset > maxOffset) globalMenuScrollOffset = maxOffset;
+      }
       lastEncoderCount = encoderCount;
       audioFeedback(AudioCue::Scroll);
     }
@@ -1267,6 +1437,7 @@ void loop() {
       if(dashboardFocusIndex == 0){
         displayMode = DISPLAY_MODE_GLOBAL_MENU;
         globalMenuIndex = 0;
+        globalMenuScrollOffset = 0;
         audioFeedback(AudioCue::Select);
       } else if(dashboardFocusIndex == 1){
         if(active){
@@ -1312,6 +1483,9 @@ void loop() {
       int count = discovery.getPeerCount();
       if(selectedPeer == count){
         displayMode = DISPLAY_MODE_HOME;
+        if(discovery.isPaired()){
+          discovery.setDiscoveryEnabled(false);
+        }
         audioFeedback(AudioCue::Back);
       } else if(count > 0){
         infoPeer = selectedPeer;
@@ -1349,6 +1523,8 @@ void loop() {
       if(homeSelected){
         displayMode = DISPLAY_MODE_PAIRING;
         homeSelected = false;
+        discovery.setDiscoveryEnabled(true);
+        discovery.discover();
         audioFeedback(AudioCue::Back);
       } else {
         const uint8_t *mac = discovery.getPeer(infoPeer);
@@ -1372,9 +1548,8 @@ void loop() {
         audioFeedback(AudioCue::Select);
       }
     } else if(displayMode == DISPLAY_MODE_PID){
-      displayMode = DISPLAY_MODE_HOME;
-      homeMenuIndex = 2;
-      audioFeedback(AudioCue::Back);
+      pidFocusIndex = (pidFocusIndex + 1) % PID_FOCUS_COUNT;
+      audioFeedback(AudioCue::Select);
     } else if(displayMode == DISPLAY_MODE_ORIENTATION || displayMode == DISPLAY_MODE_ABOUT){
       if(homeSelected){
         displayMode = DISPLAY_MODE_HOME;
@@ -1396,9 +1571,17 @@ void loop() {
             homeMenuIndex = 0;
             audioFeedback(AudioCue::Select);
             break;
+          case GlobalMenuAction::Home:
+            displayMode = DISPLAY_MODE_HOME;
+            homeMenuIndex = 0;
+            audioFeedback(AudioCue::Select);
+            break;
           case GlobalMenuAction::Pairing:
             displayMode = DISPLAY_MODE_PAIRING;
             selectedPeer = 0;
+            lastDiscoveryTime = millis();
+            discovery.setDiscoveryEnabled(true);
+            discovery.discover();
             audioFeedback(AudioCue::Select);
             break;
           case GlobalMenuAction::Log:
@@ -1434,8 +1617,11 @@ void loop() {
             break;
           case GlobalMenuAction::PID:
             displayMode = DISPLAY_MODE_PID;
-            pidGraphIndex = 0;
+            pidTunerAxisIndex = 0;
+            pidFocusIndex = 0;
+            pidCoarseMode = false;
             audioFeedback(AudioCue::Select);
+            requestPidGains();
             break;
           case GlobalMenuAction::PacketVariables:
             displayMode = DISPLAY_MODE_PACKET;

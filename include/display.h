@@ -22,6 +22,7 @@ extern int gillConfigIndex;
 extern bool genericConfigActive;
 extern int genericConfigIndex;
 extern int globalMenuIndex;
+extern int globalMenuScrollOffset;
 extern int dashboardFocusIndex;
 extern int logScrollOffset;
 
@@ -63,6 +64,13 @@ void drawTelemetryInfo();
 // Draw a single PID graph based on the currently selected axis
 void drawPidGraph();
 void drawOrientationCube();
+
+constexpr uint8_t PID_FOCUS_AXIS = 0;
+constexpr uint8_t PID_FOCUS_KP = 1;
+constexpr uint8_t PID_FOCUS_KI = 2;
+constexpr uint8_t PID_FOCUS_KD = 3;
+constexpr uint8_t PID_FOCUS_STEP = 4;
+constexpr uint8_t PID_FOCUS_COUNT = 5;
 void drawPairingMenu();
 void drawPeerInfo();
 void drawHomeMenu();
@@ -96,4 +104,14 @@ int getLogMaxScrollOffset();
 void drawHeader(const char* title);
 
 // Currently selected PID graph index (0=pitch,1=roll,2=yaw)
-extern int pidGraphIndex;
+struct PidGains {
+    float kp;
+    float ki;
+    float kd;
+};
+
+extern PidGains pidGains[PID_AXIS_COUNT];
+extern bool pidGainsValid[PID_AXIS_COUNT];
+extern int pidTunerAxisIndex;
+extern uint8_t pidFocusIndex;
+extern bool pidCoarseMode;

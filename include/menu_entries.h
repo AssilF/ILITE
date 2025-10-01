@@ -4,6 +4,7 @@
 
 enum class GlobalMenuAction : uint8_t {
   Dashboards,
+  Home,
   Pairing,
   Log,
   Configurations,

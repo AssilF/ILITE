@@ -17,9 +17,10 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0);
 #define bootSubFont u8g2_font_6x13_tf
 #define smallIconFont u8g2_font_open_iconic_all_1x_t
 #define statusFont u8g2_font_5x8_tf
+#define tinyFont u8g2_font_4x6_tf
 
 constexpr int16_t kStatusFontHeight = 8;
-constexpr int16_t kStatusBarHeight = kStatusFontHeight + 6;
+constexpr int16_t kStatusBarHeight = kStatusFontHeight + 4;
 
 byte displayMode = DISPLAY_MODE_LOG;
 int homeMenuIndex = 0;
@@ -34,19 +35,42 @@ int genericConfigIndex = 0;
 int globalMenuIndex = 0;
 int dashboardFocusIndex = 0;
 int logScrollOffset = 0;
+int globalMenuScrollOffset = 0;
+
+constexpr int kGlobalMenuVisibleLines = 4;
 
 extern bool autoDashboardEnabled;
 extern ModuleState* lastPairedModule;
 extern bool btnmode;
 
+extern PidGains pidGains[PID_AXIS_COUNT];
+extern bool pidGainsValid[PID_AXIS_COUNT];
+extern int pidTunerAxisIndex;
+extern uint8_t pidFocusIndex;
+extern bool pidCoarseMode;
+extern uint8_t droneStabilizationMask;
+extern bool droneStabilizationGlobal;
+
 namespace {
-constexpr int kLogVisibleLines = 5;
-constexpr int16_t kLogStartY = 14;
-constexpr int16_t kLogLineHeight = 8;
-constexpr size_t kLogMaxCharsPerLine = 20;
-constexpr size_t kLogLineBufferSize = 64;
-constexpr int16_t kLogButtonBarHeight = 12;
-constexpr int16_t kLogButtonPadding = 2;
+constexpr int kLogVisibleLines = 8;
+constexpr int16_t kLogStartY = kStatusBarHeight + 2;
+constexpr int16_t kLogLineHeight = 6;
+constexpr size_t kLogMaxCharsPerLine = 32;
+constexpr size_t kLogLineBufferSize = 80;
+
+int mapHistoryValue(int16_t value, int16_t minValue, int16_t maxValue, int top, int bottom) {
+  if (maxValue == minValue) {
+    return top;
+  }
+  if (value < minValue) value = minValue;
+  if (value > maxValue) value = maxValue;
+  const int range = maxValue - minValue;
+  const int span = bottom - top;
+  if (span <= 0) {
+    return top;
+  }
+  return bottom - static_cast<int>((static_cast<long>(value - minValue) * span) / range);
+}
 
 size_t nextWrappedSegment(const char* text, size_t start, size_t totalLength,
                           size_t* nextStart) {
@@ -312,7 +336,6 @@ byte speedTarget;
 byte linePosition = B00001010;
 byte firePose = 90;
 
-int pidGraphIndex = 0;
 
 int LM_Line=99;
 int RM_Line=999;
@@ -378,38 +401,44 @@ void drawCompassStatus(){
 
 void drawProximity(){
   oled.setDrawColor(1);
-  oled.drawRFrame(14,36,12,28,3);
-  oled.drawBox(16,57,8,map(Front_Distance,0,50,27,0));
-  oled.setDrawColor(1);
-  oled.drawRFrame(1,36,12,28,3);
-  oled.drawBox(3,57,8,map(Bottom_Distance,0,50,27,0));
+  int16_t baseY = kStatusBarHeight + 22;
+  oled.drawRFrame(14, baseY, 12, 28, 3);
+  oled.drawBox(16, baseY + 21, 8, map(Front_Distance, 0, 50, 27, 0));
+  oled.drawRFrame(1, baseY, 12, 28, 3);
+  oled.drawBox(3, baseY + 21, 8, map(Bottom_Distance, 0, 50, 27, 0));
 }
 
 void drawSpeed(){
   oled.setFont(textFont);
   oled.setDrawColor(2);
-  oled.setCursor(56, 58);
+  int16_t labelY = kStatusBarHeight + 44;
+  oled.setCursor(56, labelY);
   oled.print(speed);
-  oled.setDrawColor(2);
-  oled.drawRFrame(28,48,71,12,4);
-  oled.drawBox(30,50,map(speed,0,100,0,67),8);
-  oled.drawLine(32, 61, map(analogRead(potA),0,4096,32,80), 61);
+  int16_t frameY = kStatusBarHeight + 34;
+  oled.drawRFrame(28, frameY, 71, 12, 4);
+  oled.drawBox(30, frameY + 2, map(speed, 0, 100, 0, 67), 8);
+  int16_t lineY = kStatusBarHeight + 47;
+  oled.drawLine(32, lineY, map(analogRead(potA), 0, 4096, 32, 80), lineY);
 }
 
 void drawLine(){
   oled.setDrawColor(1);
-  oled.drawRFrame(1,11,20,15,3);
-  (linePosition>>3)? oled.drawBox(3,13,3,11): (void)0;
-  ((linePosition>>2)&1)? oled.drawBox(7,13,3,11): (void)0;
-  ((linePosition>>1)&1)? oled.drawBox(12,13,3,11): (void)0;
-  ((linePosition&1)&1)? oled.drawBox(16,13,3,11): (void)0;
+  int16_t frameY = kStatusBarHeight + 1;
+  oled.drawRFrame(1, frameY, 20, 15, 3);
+  int16_t fillY = frameY + 2;
+  (linePosition>>3)? oled.drawBox(3, fillY, 3, 11): (void)0;
+  ((linePosition>>2)&1)? oled.drawBox(7, fillY, 3, 11): (void)0;
+  ((linePosition>>1)&1)? oled.drawBox(12, fillY, 3, 11): (void)0;
+  ((linePosition&1)&1)? oled.drawBox(16, fillY, 3, 11): (void)0;
 }
 
 void drawFirePosition(){
   oled.setDrawColor(1);
-  oled.drawRFrame(28,35,71,12,4);
+  int16_t frameY = kStatusBarHeight + 21;
+  oled.drawRFrame(28, frameY, 71, 12, 4);
   oled.setFont(u8g2_font_open_iconic_all_1x_t);
-  oled.drawGlyph(map(firePose,0,180,80,32), 45, 0x00a8);
+  int16_t glyphY = frameY + 10;
+  oled.drawGlyph(map(firePose, 0, 180, 80, 32), glyphY, 0x00a8);
 }
 
 void tirminal () {
@@ -418,14 +447,20 @@ void tirminal () {
 
 void drawMotionJoystickPose(){
   oled.setDrawColor(1);
-  oled.drawRBox(100+map(analogRead(joystickB_X),0,4096,0,23),46+map(analogRead(joystickB_Y),0,4096,0,16),3,3,1);
-  oled.drawRFrame(100,46,25,18,3);
+  int16_t frameY = kStatusBarHeight + 32;
+  oled.drawRBox(100 + map(analogRead(joystickB_X), 0, 4096, 0, 23),
+                frameY + map(analogRead(joystickB_Y), 0, 4096, 0, 16),
+                3, 3, 1);
+  oled.drawRFrame(100, frameY, 25, 18, 3);
 }
 
 void drawPeripheralJoystickPose(){
   oled.setDrawColor(1);
-  oled.drawRBox(100+map(analogRead(joystickA_X),0,4096,0,23),27+map(analogRead(joystickA_Y),0,4096,0,16),3,3,1);
-  oled.drawRFrame(100,27,25,18,3);
+  int16_t frameY = kStatusBarHeight + 13;
+  oled.drawRBox(100 + map(analogRead(joystickA_X), 0, 4096, 0, 23),
+                frameY + map(analogRead(joystickA_Y), 0, 4096, 0, 16),
+                3, 3, 1);
+  oled.drawRFrame(100, frameY, 25, 18, 3);
 }
 
 void drawDrongazInterface(){
@@ -492,7 +527,7 @@ void drawTelemetryInfo(){
   drawHeader("Telemetry");
   oled.setFont(smallFont);
   int y = 14;
-  oled.setCursor(0, y);       oled.print("Alt: ");  oled.print(telemetry.altitude);
+  oled.setCursor(0, y);       oled.print("Alt: ");  oled.print("N/A");
   y += 8;
   oled.setCursor(0, y);       oled.print("Pitch: "); oled.print(telemetry.pitch);
   y += 8;
@@ -614,21 +649,113 @@ void drawModeSummary(){
 
 void drawPidGraph(){
   oled.clearBuffer();
-  int16_t* history;
-  const char* label;
-  switch(pidGraphIndex){
-    case 0: history = pidPitchHistory; label = "Pitch"; break;
-    case 1: history = pidRollHistory;  label = "Roll";  break;
-    default: history = pidYawHistory; label = "Yaw";   break;
-  }
+  static const char axisLabels[PID_AXIS_COUNT][6] = {"Pitch", "Roll", "Yaw"};
+  const int axis = constrain(pidTunerAxisIndex, 0, PID_AXIS_COUNT - 1);
+
   char title[16];
-  snprintf(title, sizeof(title), "PID %s", label);
+  snprintf(title, sizeof(title), "PID %s", axisLabels[axis]);
   drawHeader(title);
-  for(int x=1; x<screen_Width; x++){
-    oled.drawLine(x-1, map(history[x-1], -500, 500, screen_Height-1, 13),
-                  x,   map(history[x],   -500, 500, screen_Height-1, 13));
+  static const char axisLetters[PID_AXIS_COUNT] = {'P', 'R', 'Y'};
+  static const uint8_t axisMaskBits[PID_AXIS_COUNT] = {0x02, 0x01, 0x04};
+
+  const int graphTop = 14;
+  const int graphBottom = 38;
+  const int16_t correctionMin = -800;
+  const int16_t correctionMax = 800;
+
+  oled.setFont(smallFont);
+  oled.setDrawColor(1);
+
+  int zeroY = mapHistoryValue(0, correctionMin, correctionMax, graphTop, graphBottom);
+  oled.drawHLine(0, zeroY, screen_Width);
+
+  int prevY = mapHistoryValue(pidCorrectionHistory[axis][0], correctionMin, correctionMax, graphTop, graphBottom);
+  for (int x = 1; x < screen_Width; ++x) {
+    int currY = mapHistoryValue(pidCorrectionHistory[axis][x], correctionMin, correctionMax, graphTop, graphBottom);
+    oled.drawLine(x - 1, prevY, x, currY);
+    prevY = currY;
   }
-  drawHomeFooter();
+
+  float setpoint = (axis == 0) ? static_cast<float>(telemetry.pitchAngle)
+                 : (axis == 1) ? static_cast<float>(telemetry.rollAngle)
+                               : static_cast<float>(telemetry.yawAngle);
+  float actual = (axis == 0) ? telemetry.pitch : (axis == 1) ? telemetry.roll : telemetry.yaw;
+  float error = setpoint - actual;
+  float response = (axis == 0) ? telemetry.pitchCorrection
+                 : (axis == 1) ? telemetry.rollCorrection : telemetry.yawCorrection;
+
+  char buffer[16];
+  int textX = screen_Width - 40;
+  if (textX < 80) textX = 80;
+  oled.setCursor(textX, graphTop + 8);
+  snprintf(buffer, sizeof(buffer), "SP:%4.1f", setpoint);
+  oled.print(buffer);
+  oled.setCursor(textX, graphTop + 16);
+  snprintf(buffer, sizeof(buffer), "PV:%4.1f", actual);
+  oled.print(buffer);
+  oled.setCursor(textX, graphTop + 24);
+  snprintf(buffer, sizeof(buffer), "Err:%4.1f", error);
+  oled.print(buffer);
+  oled.setCursor(textX, graphTop + 32);
+  snprintf(buffer, sizeof(buffer), "Resp:%4.0f", response);
+  oled.print(buffer);
+
+  const bool focusAxis = pidFocusIndex == PID_FOCUS_AXIS;
+  const bool focusKp = pidFocusIndex == PID_FOCUS_KP;
+  const bool focusKi = pidFocusIndex == PID_FOCUS_KI;
+  const bool focusKd = pidFocusIndex == PID_FOCUS_KD;
+  const bool focusStep = pidFocusIndex == PID_FOCUS_STEP;
+
+  char axisLine[64];
+  axisLine[0] = ' ';
+  for (int i = 0; i < PID_AXIS_COUNT; ++i) {
+    bool selected = (i == pidTunerAxisIndex);
+    bool enabled = (droneStabilizationMask & axisMaskBits[i]) != 0;
+    char letter = selected ? axisLetters[i] : static_cast<char>(tolower(axisLetters[i]));
+    char segment[16];
+    const char* prefix = (selected && focusAxis) ? ">" : " ";
+    snprintf(segment, sizeof(segment), "%s%c[%c]", prefix, letter, enabled ? 'x' : ' ');
+    strncat(axisLine, segment, sizeof(axisLine) - strlen(axisLine) - 1);
+    if (i + 1 < PID_AXIS_COUNT) {
+      strncat(axisLine, " ", sizeof(axisLine) - strlen(axisLine) - 1);
+    }
+  }
+  strncat(axisLine, " G:", sizeof(axisLine) - strlen(axisLine) - 1);
+  strncat(axisLine, droneStabilizationGlobal ? "ON" : "OFF", sizeof(axisLine) - strlen(axisLine) - 1);
+
+  oled.setCursor(0, 46);
+  oled.print(axisLine);
+
+  const PidGains& gains = pidGains[axis];
+  char kpBuf[16];
+  char kiBuf[16];
+  char kdBuf[16];
+  if (pidGainsValid[axis]) {
+    snprintf(kpBuf, sizeof(kpBuf), "Kp:%4.2f", gains.kp);
+    snprintf(kiBuf, sizeof(kiBuf), "Ki:%4.2f", gains.ki);
+    snprintf(kdBuf, sizeof(kdBuf), "Kd:%4.2f", gains.kd);
+  } else {
+    strcpy(kpBuf, "Kp:--");
+    strcpy(kiBuf, "Ki:--");
+    strcpy(kdBuf, "Kd:--");
+  }
+
+  oled.setCursor(0, 54);
+  oled.print(focusKp ? ">" : " ");
+  oled.print(kpBuf);
+  oled.print(" ");
+  oled.print(focusKi ? ">" : " ");
+  oled.print(kiBuf);
+  oled.print(" ");
+  oled.print(focusKd ? ">" : " ");
+  oled.print(kdBuf);
+
+  oled.setCursor(0, 62);
+  oled.print(focusStep ? ">" : " ");
+  oled.print("Step:");
+  oled.print(pidCoarseMode ? "Coarse" : "Fine  ");
+  oled.print(" F1 Axis  F2 Step  F3 Home");
+
   oled.sendBuffer();
 }
 
@@ -807,17 +934,34 @@ void drawGlobalMenu(){
   oled.setFont(smallFont);
   MenuEntry entries[10];
   int count = buildGlobalMenuEntries(entries, 10);
-  int y = 18;
   if(count <= 0){
-    oled.setCursor(0, y);
+    oled.setCursor(0, 18);
     oled.print("No options");
   } else {
     if(globalMenuIndex >= count) globalMenuIndex = count - 1;
-    for(int i = 0; i < count; ++i){
+    if(globalMenuIndex < 0) globalMenuIndex = 0;
+    int maxOffset = count - kGlobalMenuVisibleLines;
+    if(maxOffset < 0) maxOffset = 0;
+    if(globalMenuScrollOffset > maxOffset) globalMenuScrollOffset = maxOffset;
+    if(globalMenuIndex < globalMenuScrollOffset) globalMenuScrollOffset = globalMenuIndex;
+    if(globalMenuIndex >= globalMenuScrollOffset + kGlobalMenuVisibleLines) {
+      globalMenuScrollOffset = globalMenuIndex - kGlobalMenuVisibleLines + 1;
+    }
+    int y = 18;
+    int end = globalMenuScrollOffset + kGlobalMenuVisibleLines;
+    if(end > count) end = count;
+    for(int i = globalMenuScrollOffset; i < end; ++i){
       oled.setCursor(0, y);
       oled.print(i == globalMenuIndex ? ">" : " ");
       oled.print(entries[i].label);
       y += 10;
+    }
+    if(globalMenuScrollOffset > 0){
+      oled.drawTriangle(screen_Width - 6, 18, screen_Width - 2, 18, screen_Width - 4, 12);
+    }
+    if(globalMenuScrollOffset + kGlobalMenuVisibleLines < count){
+      int arrowY = 18 + (kGlobalMenuVisibleLines - 1) * 10 + 6;
+      oled.drawTriangle(screen_Width - 6, arrowY, screen_Width - 2, arrowY, screen_Width - 4, arrowY + 6);
     }
   }
 
@@ -1002,7 +1146,7 @@ void drawGenericDashboard(){
   }
   oled.setFont(smallFont);
   int16_t textY = top + 6;
-  oled.setCursor(0, textY);           oled.print("Alt:"); oled.print(telemetry.altitude);
+  oled.setCursor(0, textY);           oled.print("Alt:"); oled.print("N/A");
   textY += 8;
   oled.setCursor(0, textY);           oled.print("Thr:"); oled.print(emission.throttle);
   textY += 8;
@@ -1016,7 +1160,7 @@ void drawGenericDashboard(){
 void drawConnectionLog(){
   oled.clearBuffer();
   drawHeader("Link Log");
-  oled.setFont(smallFont);
+  oled.setFont(tinyFont);
 
   const size_t count = connectionLogGetCount();
   const size_t totalLines = getTotalWrappedLineCount();
@@ -1060,7 +1204,8 @@ void drawConnectionLog(){
         if(!extractWrappedLine(entry, line, buffer, sizeof(buffer))){
           continue;
         }
-        oled.setCursor(0, kLogStartY + drawnLines * kLogLineHeight);
+        int16_t y = kLogStartY + drawnLines * kLogLineHeight;
+        oled.setCursor(0, y);
         oled.print(buffer);
         ++drawnLines;
       }
@@ -1068,42 +1213,6 @@ void drawConnectionLog(){
     }
   }
 
-  const int16_t buttonY = screen_Height - kLogButtonBarHeight;
-  oled.drawHLine(0, buttonY - 1, screen_Width);
-  const char* labels[3] = {"Back", "Pairs", "Clear"};
-  int16_t x = kLogButtonPadding;
-  const int buttonCount = 3;
-  int16_t baseWidth = (screen_Width - (kLogButtonPadding * (buttonCount + 1))) / buttonCount;
-  if(baseWidth < 18){
-    baseWidth = 18;
-  }
-  for(int i = 0; i < buttonCount; ++i){
-    int16_t width = baseWidth;
-    if(i == buttonCount - 1){
-      int16_t remaining = screen_Width - x - kLogButtonPadding;
-      if(remaining > width){
-        width = remaining;
-      }
-    }
-    if(x + width > screen_Width - kLogButtonPadding){
-      width = screen_Width - kLogButtonPadding - x;
-    }
-    if(width < 12){
-      width = 12;
-    }
-    oled.drawRFrame(x, buttonY + 1, width, kLogButtonBarHeight - 2, 2);
-    int16_t textWidth = oled.getUTF8Width(labels[i]);
-    int16_t textX = x + (width - textWidth) / 2;
-    if(textX < x + 1) textX = x + 1;
-    int16_t textY = buttonY + (kLogButtonBarHeight / 2) + 3;
-    if(textY > screen_Height) textY = screen_Height;
-    oled.setCursor(textX, textY);
-    oled.print(labels[i]);
-    x += width + kLogButtonPadding;
-    if(x > screen_Width - kLogButtonPadding){
-      x = screen_Width - kLogButtonPadding;
-    }
-  }
   oled.sendBuffer();
 }
 
@@ -1115,45 +1224,42 @@ static void drawStatusBar(){
   oled.drawHLine(0, kStatusBarHeight - 1, screen_Width);
 
   ModuleState* active = getActiveModule();
-  const int buttonCount = 2 + static_cast<int>(kMaxFunctionSlots);
-  constexpr int16_t kMinNameWidth = 32;
-  int16_t nameAreaWidth = kMinNameWidth;
-  if(nameAreaWidth > screen_Width - buttonCount * 10){
-    nameAreaWidth = screen_Width - buttonCount * 10;
-    if(nameAreaWidth < 12){
-      nameAreaWidth = 12;
-    }
+  bool hasFunction = active && active->descriptor && active->descriptor->functionOptionCount > 0;
+  const FunctionActionOption* functionAction = hasFunction ? getAssignedAction(*active, 0) : nullptr;
+  const char* functionLabel = functionAction ? functionAction->shortLabel : "---";
+  bool functionActive = hasFunction ? getFunctionOutput(*active, 0) : false;
+
+  const int buttonCount = hasFunction ? 2 : 1;
+  const int16_t kButtonWidth = 28;
+  int16_t buttonAreaWidth = kButtonWidth * buttonCount;
+  if(buttonAreaWidth > screen_Width / 2){
+    buttonAreaWidth = screen_Width / 2;
   }
-  int16_t buttonWidth = (screen_Width - nameAreaWidth) / buttonCount;
-  if(buttonWidth < 10){
-    buttonWidth = 10;
-    nameAreaWidth = screen_Width - buttonWidth * buttonCount;
-    if(nameAreaWidth < 10){
-      nameAreaWidth = 10;
-    }
-  }
-  int16_t remainder = screen_Width - (buttonWidth * buttonCount + nameAreaWidth);
-  if(remainder > 0){
-    nameAreaWidth += remainder;
+  int16_t nameAreaX = buttonAreaWidth;
+  int16_t nameAreaWidth = screen_Width - nameAreaX;
+  if(nameAreaWidth < 32){
+    nameAreaWidth = 32;
+    buttonAreaWidth = screen_Width - nameAreaWidth;
   }
 
-  auto drawButton = [&](int index, int focusIndex, const char* label, bool activeState){
-    int16_t x = index * buttonWidth;
-    int16_t width = buttonWidth;
+  auto drawButton = [&](int index, const char* label, bool focused, bool activeIndicator){
+    int16_t x = index * kButtonWidth;
+    if(x >= buttonAreaWidth){
+      x = buttonAreaWidth - kButtonWidth;
+    }
+    int16_t width = kButtonWidth;
     if(index == buttonCount - 1){
-      width = screen_Width - nameAreaWidth - x;
+      width = buttonAreaWidth - x;
     }
-    if(width < 8) width = 8;
-    bool focused = dashboardFocusIndex == focusIndex;
-    if(focused){
-      oled.drawRFrame(x, 0, width - 1, kStatusBarHeight - 1, 2);
-    } else {
-      oled.drawFrame(x, 0, width - 1, kStatusBarHeight - 1);
+    if(width < 20){
+      width = 20;
     }
-    if(activeState){
-      oled.drawBox(x + 2, 2, width - 5, kStatusBarHeight - 5);
+    bool fill = focused;
+    if(fill){
+      oled.drawBox(x, 0, width, kStatusBarHeight - 1);
       oled.setDrawColor(0);
     } else {
+      oled.drawFrame(x, 0, width, kStatusBarHeight - 1);
       oled.setDrawColor(1);
     }
     int16_t textWidth = oled.getUTF8Width(label);
@@ -1163,19 +1269,19 @@ static void drawStatusBar(){
     oled.setCursor(textX, textY);
     oled.print(label);
     oled.setDrawColor(1);
+    if(!fill && activeIndicator){
+      oled.drawBox(x + width - 5, 2, 3, 3);
+    }
   };
 
-  drawButton(0, 0, "Menu", false);
-  bool wifiOn = active && active->wifiEnabled;
-  drawButton(1, 1, wifiOn ? "WiFi" : "WiFi", wifiOn);
-  for(size_t slot = 0; slot < kMaxFunctionSlots; ++slot){
-    const FunctionActionOption* action = active ? getAssignedAction(*active, slot) : nullptr;
-    const char* label = action ? action->shortLabel : "---";
-    bool state = active ? getFunctionOutput(*active, slot) : false;
-    drawButton(static_cast<int>(slot) + 2, static_cast<int>(slot) + 2, label, state);
+  drawButton(0, "Menu", dashboardFocusIndex == 0, false);
+  if(hasFunction){
+    drawButton(1, functionLabel, dashboardFocusIndex == 1, functionActive);
   }
 
-  int16_t nameX = buttonWidth * buttonCount;
+  if(nameAreaWidth > 0){
+    oled.drawVLine(nameAreaX, 0, kStatusBarHeight - 1);
+  }
   const char* name = "--";
   char buffer[32];
   if(autoDashboardEnabled && lastPairedModule && lastPairedModule->descriptor){
@@ -1187,7 +1293,7 @@ static void drawStatusBar(){
     name = lastPairedModule->descriptor->displayName;
   }
   int16_t textWidth = oled.getUTF8Width(name);
-  if(textWidth > nameAreaWidth - 2){
+  if(textWidth > nameAreaWidth - 4){
     size_t len = strlen(name);
     while(len > 0){
       strncpy(buffer, name, len);
@@ -1206,10 +1312,10 @@ static void drawStatusBar(){
       textWidth = 0;
     }
   }
-  int16_t nameTextX = nameX + (nameAreaWidth - textWidth) / 2;
-  if(nameTextX < nameX + 1) nameTextX = nameX + 1;
+  int16_t textX = nameAreaX + (nameAreaWidth - textWidth) / 2;
+  if(textX < nameAreaX + 1) textX = nameAreaX + 1;
   int16_t textY = (kStatusBarHeight + kStatusFontHeight) / 2;
-  oled.setCursor(nameTextX, textY);
+  oled.setCursor(textX, textY);
   oled.print(name);
 }
 

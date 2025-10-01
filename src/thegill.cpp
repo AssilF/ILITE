@@ -24,6 +24,18 @@ ThegillRuntime thegillRuntime{
   false
 };
 
+ThegillTelemetryPacket thegillTelemetryPacket{
+  THEGILL_PACKET_MAGIC,
+  0.f, 0.f, 0.f,
+  0.f, 0.f, 0.f,
+  0,
+  0, 0, 0,
+  0.f,
+  0.f,
+  0
+};
+
+
 float applyEasingCurve(GillEasing mode, float t){
   if(t <= 0.f) return 0.f;
   if(t >= 1.f) return 1.f;

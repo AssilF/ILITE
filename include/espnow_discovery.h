@@ -82,6 +82,14 @@ public:
     int findPeerIndex(const uint8_t* mac) const;
     bool sendCommand(const uint8_t* mac, const char* command);
     void resetLinkState();
+    bool isPaired() const;
+    int getPairedPeerIndex() const;
+    const uint8_t* getPairedMac() const;
+    const Identity* getPairedIdentity() const;
+    void setDiscoveryEnabled(bool enabled);
+    bool isDiscoveryEnabled() const;
+    bool beginPairingWith(const uint8_t* mac);
+    void setCommandCallback(void (*callback)(const char* message));
 
     // Utility helpers.
     static void macToString(const uint8_t* mac, char* buffer, size_t bufferLen);
@@ -123,6 +131,8 @@ private:
     int peerCount = 0;
     LinkState link{};
     uint32_t lastBroadcastMs = 0;
+    bool discoveryEnabled = true;
+    void (*commandCallback)(const char* message) = nullptr;
 };
 
 #endif // ESPNOW_DISCOVERY_H
