@@ -11,8 +11,10 @@ enum class GillMode : uint8_t {
 };
 
 // Available easing curves that shape motor ramp behaviour.
+// All easing modes limit overshoot near zero to avoid brief power spikes
+// when the ramp converges to an idle output.
 enum class GillEasing : uint8_t {
-  None = 0,
+  None = 0,   // Direct linear response (no additional easing curve).
   Linear,
   EaseIn,
   EaseOut,
