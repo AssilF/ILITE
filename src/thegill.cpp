@@ -39,23 +39,36 @@ ThegillTelemetryPacket thegillTelemetryPacket{
 float applyEasingCurve(GillEasing mode, float t){
   if(t <= 0.f) return 0.f;
   if(t >= 1.f) return 1.f;
+
+  float eased;
   switch(mode){
     case GillEasing::None:
-      return 1.f;
     case GillEasing::Linear:
-      return t;
+      eased = t;
+      break;
     case GillEasing::EaseIn:
-      return t * t;
+      eased = t * t;
+      break;
     case GillEasing::EaseOut:
-      return 1.f - powf(1.f - t, 2.f);
+      eased = 1.f - powf(1.f - t, 2.f);
+      break;
     case GillEasing::EaseInOut:
       if(t < 0.5f){
-        return 2.f * t * t;
+        eased = 2.f * t * t;
+      }else{
+        eased = 1.f - powf(-2.f * t + 2.f, 2.f) / 2.f;
       }
-      return 1.f - powf(-2.f * t + 2.f, 2.f) / 2.f;
+      break;
     case GillEasing::Sine:
     default:
-      return sinf((t * PI) / 2.f);
+      eased = sinf((t * PI) / 2.f);
+      break;
   }
+
+  if(eased > t){
+    const float overshoot = eased - t;
+    return t + overshoot * t;
+  }
+  return eased;
 }
 
