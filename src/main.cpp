@@ -1,3 +1,15 @@
+/**
+ * @file main.cpp
+ * @brief ILITE Universal Controller - Main entry point
+ *
+ * ESP32-based modular controller for ASCE robotics platforms.
+ * Supports wireless ESP-NOW communication, OLED display, dual joysticks,
+ * and hot-swappable control modules.
+ *
+ * @author Assil M. Ferahta
+ * @date 2023-2025
+ */
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
@@ -13,6 +25,8 @@
 #include "input.h"
 #include "telemetry.h"
 #include "thegill.h"
+#include "drongaze.h"
+#include "generic_module.h"
 #include "audio_feedback.h"
 #include "ui_modules.h"
 #include "menu_entries.h"
@@ -136,6 +150,11 @@ int16_t yawCommand = 0;
 // Global botSpeed variable
 int8_t botSpeed = 0;
 
+/**
+ * @brief Check if device name contains "gill" (case-insensitive)
+ * @param name Device custom ID string
+ * @return true if name contains "gill"
+ */
 static bool isNameThegill(const char* name){
   if(name == nullptr) return false;
   size_t len = strlen(name);
@@ -150,6 +169,11 @@ static bool isNameThegill(const char* name){
   return false;
 }
 
+/**
+ * @brief Check if device name contains "bulky" (case-insensitive)
+ * @param name Device custom ID string
+ * @return true if name contains "bulky"
+ */
 static bool isNameBulky(const char* name){
   if(name == nullptr) return false;
   const char target[] = {'b','u','l','k','y'};
@@ -169,6 +193,38 @@ static bool isNameBulky(const char* name){
       return true;
     }
   }
+  return false;
+}
+
+/**
+ * @brief Check if device name contains "dron" or "gaze" (case-insensitive)
+ * @param name Device custom ID string
+ * @return true if name suggests DroneGaze platform
+ */
+static bool isNameDrongaze(const char* name){
+  if(name == nullptr) return false;
+  size_t len = strlen(name);
+
+  // Check for "dron" (catches "drone", "drongaze", etc.)
+  for(size_t i = 0; i + 3 < len; ++i){
+    if(tolower(static_cast<unsigned char>(name[i])) == 'd' &&
+       tolower(static_cast<unsigned char>(name[i+1])) == 'r' &&
+       tolower(static_cast<unsigned char>(name[i+2])) == 'o' &&
+       tolower(static_cast<unsigned char>(name[i+3])) == 'n'){
+      return true;
+    }
+  }
+
+  // Check for "gaze"
+  for(size_t i = 0; i + 3 < len; ++i){
+    if(tolower(static_cast<unsigned char>(name[i])) == 'g' &&
+       tolower(static_cast<unsigned char>(name[i+1])) == 'a' &&
+       tolower(static_cast<unsigned char>(name[i+2])) == 'z' &&
+       tolower(static_cast<unsigned char>(name[i+3])) == 'e'){
+      return true;
+    }
+  }
+
   return false;
 }
 
