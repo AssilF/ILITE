@@ -17,10 +17,6 @@
     "ArduinoJson": "*"
   },
   "build": {
-    "flags": [
-      "-std=c++17",
-      "-DCORE_DEBUG_LEVEL=3"
-    ],
     "includeDir": "include"
   }
 }

@@ -18,6 +18,7 @@
 #include <ILITE.h>
 #include <AudioRegistry.h>
 #include <ControlBindingSystem.h>
+#include <MenuRegistry.h>
 
 // ============================================================================
 // Configuration
@@ -61,7 +62,7 @@ void setup() {
     // Configure ILITE framework
     ILITEConfig config;
     config.controlLoopHz = 50;           // 50Hz control loop
-    config.displayRefreshHz = 10;        // 10Hz display refresh
+    config.displayRefreshHz = 20;        // 10Hz display refresh
     config.enableAudio = true;           // Enable audio feedback
     config.enableOTA = true;             // Enable OTA updates
     config.wifiSSID = WIFI_SSID;         // WiFi SSID for OTA
@@ -79,25 +80,31 @@ void setup() {
 
     // Register custom control bindings (after framework init)
     // Example: Play sound on button 3 press
-    ControlBindingSystem::registerBinding({
-        .input = INPUT_BUTTON3,
-        .event = EVENT_CLICK,
-        .action = []() {
-            AudioRegistry::play("menu_select");
-        }
-    });
+    ControlBinding binding1;
+    binding1.input = INPUT_BUTTON3;
+    binding1.event = EVENT_CLICK;
+    binding1.action = []() {
+        AudioRegistry::play("menu_select");
+    };
+    binding1.condition = nullptr;
+    binding1.screenId = nullptr;
+    binding1.duration = 0;
+    binding1.priority = 0;
+    ControlBindingSystem::registerBinding(binding1);
 
     // Example: Emergency stop on long press (2+ seconds) of button 1
-    ControlBindingSystem::registerBinding({
-        .input = INPUT_BUTTON1,
-        .event = EVENT_LONG_PRESS,
-        .action = []() {
-            AudioRegistry::play("error");
-            Serial.println("[EMERGENCY STOP] Button 1 held for 2+ seconds");
-            // Add emergency stop logic here if needed
-        },
-        .priority = 100  // High priority
-    });
+    ControlBinding binding2;
+    binding2.input = INPUT_BUTTON1;
+    binding2.event = EVENT_LONG_PRESS;
+    binding2.action = []() {
+        AudioRegistry::play("error");
+        Serial.println("[EMERGENCY STOP] Button 1 held for 2+ seconds");
+    };
+    binding2.condition = nullptr;
+    binding2.screenId = nullptr;
+    binding2.duration = 0;
+    binding2.priority = 100;  // High priority
+    ControlBindingSystem::registerBinding(binding2);
 
     Serial.println("\n[Setup] Framework initialized successfully!");
     Serial.println("\n==========================================");

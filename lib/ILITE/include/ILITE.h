@@ -44,6 +44,7 @@
 #include "DisplayCanvas.h"
 #include "PacketRouter.h"
 #include "ILITEHelpers.h"
+#include "AudioRegistry.h"
 
 // Forward declarations for existing subsystems
 class EspNowDiscovery;

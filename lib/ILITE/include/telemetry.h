@@ -40,12 +40,7 @@ struct TelemetryPacket {
   uint32_t commandAge;           // Age of last command in ms
 } __attribute__((packed));
 
-struct BulkyCommand {
-  uint8_t replyIndex;
-  int8_t speed;
-  uint8_t motionState;
-  uint8_t buttonStates[3];
-} __attribute__((packed));
+struct BulkyCommand;  // Forward declaration; definition in bulky.h
 
 struct WifiControlCommand {
   uint32_t magic;
