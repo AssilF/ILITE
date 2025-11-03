@@ -1,0 +1,335 @@
+/**
+ * @file InputManager.cpp
+ * @brief Input Management System Implementation
+ */
+
+#include "InputManager.h"
+#include "input.h"  // Existing pin definitions
+
+// ============================================================================
+// Singleton Instance
+// ============================================================================
+
+InputManager& InputManager::getInstance() {
+    static InputManager instance;
+    return instance;
+}
+
+// ============================================================================
+// Constructor
+// ============================================================================
+
+InputManager::InputManager()
+    : deadzone_(kDefaultDeadzone),
+      sensitivity_(kDefaultSensitivity),
+      filteringEnabled_(true),
+      encoderCount_(0),
+      lastEncoderCount_(0)
+{
+    // Initialize calibration structs
+    joyA_X_ = {2048, false, 0.0f};
+    joyA_Y_ = {2048, false, 0.0f};
+    joyB_X_ = {2048, false, 0.0f};
+    joyB_Y_ = {2048, false, 0.0f};
+
+    // Initialize button states
+    button1_ = {false, false, 0};
+    button2_ = {false, false, 0};
+    button3_ = {false, false, 0};
+    joyBtnA_ = {false, false, 0};
+    joyBtnB_ = {false, false, 0};
+    encoderBtn_ = {false, false, 0};
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+void InputManager::begin() {
+    // Set up GPIO pins
+    pinMode(encoderA, INPUT_PULLUP);
+    pinMode(encoderB, INPUT_PULLUP);
+    pinMode(encoderBtn, INPUT_PULLUP);
+    pinMode(button1, INPUT_PULLUP);
+    pinMode(button2, INPUT_PULLUP);
+    pinMode(button3, INPUT_PULLUP);
+    pinMode(joystickBtnA, INPUT_PULLUP);
+    pinMode(joystickBtnB, INPUT_PULLUP);
+
+    // Set up analog inputs
+    pinMode(joystickA_X, INPUT);
+    pinMode(joystickA_Y, INPUT);
+    pinMode(joystickB_X, INPUT);
+    pinMode(joystickB_Y, INPUT);
+    pinMode(potA, INPUT);
+
+    // Attach encoder interrupt (same as original input.cpp)
+    attachInterrupt(encoderA, []() {
+        // Encoder ISR - increment/decrement count based on direction
+        if (digitalRead(encoderB) == HIGH) {
+            encoderCount++;
+        } else {
+            encoderCount--;
+        }
+        InputManager::getInstance().encoderCount_ = encoderCount;
+    }, RISING);
+
+    // Attach encoder button interrupt
+    attachInterrupt(encoderBtn, []() {
+        uint32_t now = millis();
+        auto& mgr = InputManager::getInstance();
+        if (now - mgr.encoderBtn_.lastChangeTime >= kDebounceMs) {
+            encoderBtnState = true;  // Set global for compatibility
+            mgr.encoderBtn_.lastChangeTime = now;
+        }
+    }, RISING);
+
+    Serial.println("[InputManager] Initialized");
+}
+
+// ============================================================================
+// Update (called each frame by framework)
+// ============================================================================
+
+void InputManager::update() {
+    uint32_t now = millis();
+
+    // Update all button states for edge detection
+    updateButtonState(button1_, button1);
+    updateButtonState(button2_, button2);
+    updateButtonState(button3_, button3);
+    updateButtonState(joyBtnA_, joystickBtnA);
+    updateButtonState(joyBtnB_, joystickBtnB);
+    updateButtonState(encoderBtn_, encoderBtn);
+}
+
+// ============================================================================
+// Analog Inputs (Calibrated)
+// ============================================================================
+
+float InputManager::getJoystickA_X() const {
+    return readJoystickAxis(joystickA_X, const_cast<JoystickCalibration&>(joyA_X_));
+}
+
+float InputManager::getJoystickA_Y() const {
+    return readJoystickAxis(joystickA_Y, const_cast<JoystickCalibration&>(joyA_Y_));
+}
+
+float InputManager::getJoystickB_X() const {
+    return readJoystickAxis(joystickB_X, const_cast<JoystickCalibration&>(joyB_X_));
+}
+
+float InputManager::getJoystickB_Y() const {
+    return readJoystickAxis(joystickB_Y, const_cast<JoystickCalibration&>(joyB_Y_));
+}
+
+float InputManager::getPotentiometer() const {
+    uint16_t raw = analogRead(potA);
+    return constrain(raw / 4095.0f, 0.0f, 1.0f);
+}
+
+// ============================================================================
+// Analog Inputs (Raw)
+// ============================================================================
+
+uint16_t InputManager::getJoystickA_X_Raw() const {
+    return analogRead(joystickA_X);
+}
+
+uint16_t InputManager::getJoystickA_Y_Raw() const {
+    return analogRead(joystickA_Y);
+}
+
+uint16_t InputManager::getJoystickB_X_Raw() const {
+    return analogRead(joystickB_X);
+}
+
+uint16_t InputManager::getJoystickB_Y_Raw() const {
+    return analogRead(joystickB_Y);
+}
+
+uint16_t InputManager::getPotentiometer_Raw() const {
+    return analogRead(potA);
+}
+
+// ============================================================================
+// Digital Inputs (Current State)
+// ============================================================================
+
+bool InputManager::getButton1() const {
+    return digitalRead(button1) == LOW;
+}
+
+bool InputManager::getButton2() const {
+    return digitalRead(button2) == LOW;
+}
+
+bool InputManager::getButton3() const {
+    return digitalRead(button3) == LOW;
+}
+
+bool InputManager::getJoystickButtonA() const {
+    return digitalRead(joystickBtnA) == LOW;
+}
+
+bool InputManager::getJoystickButtonB() const {
+    return digitalRead(joystickBtnB) == LOW;
+}
+
+bool InputManager::getEncoderButton() const {
+    return digitalRead(encoderBtn) == LOW;
+}
+
+// ============================================================================
+// Digital Inputs (Edge Detection)
+// ============================================================================
+
+bool InputManager::getButton1Pressed() const {
+    return button1_.current && !button1_.previous;
+}
+
+bool InputManager::getButton2Pressed() const {
+    return button2_.current && !button2_.previous;
+}
+
+bool InputManager::getButton3Pressed() const {
+    return button3_.current && !button3_.previous;
+}
+
+bool InputManager::getJoystickButtonA_Pressed() const {
+    return joyBtnA_.current && !joyBtnA_.previous;
+}
+
+bool InputManager::getJoystickButtonB_Pressed() const {
+    return joyBtnB_.current && !joyBtnB_.previous;
+}
+
+bool InputManager::getEncoderButtonPressed() const {
+    return encoderBtn_.current && !encoderBtn_.previous;
+}
+
+// ============================================================================
+// Encoder
+// ============================================================================
+
+int InputManager::getEncoderDelta() {
+    int delta = encoderCount_ - lastEncoderCount_;
+    lastEncoderCount_ = encoderCount_;
+    return delta;
+}
+
+int InputManager::getEncoderCount() const {
+    return encoderCount_;
+}
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+void InputManager::setJoystickDeadzone(float deadzone) {
+    deadzone_ = constrain(deadzone, 0.0f, 1.0f);
+}
+
+float InputManager::getJoystickDeadzone() const {
+    return deadzone_;
+}
+
+void InputManager::setJoystickSensitivity(float sensitivity) {
+    sensitivity_ = constrain(sensitivity, 0.1f, 2.0f);
+}
+
+float InputManager::getJoystickSensitivity() const {
+    return sensitivity_;
+}
+
+void InputManager::recalibrateJoysticks() {
+    // Read current positions as new center points
+    joyA_X_.center = analogRead(joystickA_X);
+    joyA_Y_.center = analogRead(joystickA_Y);
+    joyB_X_.center = analogRead(joystickB_X);
+    joyB_Y_.center = analogRead(joystickB_Y);
+
+    joyA_X_.initialized = true;
+    joyA_Y_.initialized = true;
+    joyB_X_.initialized = true;
+    joyB_Y_.initialized = true;
+
+    Serial.println("[InputManager] Joysticks recalibrated");
+    Serial.printf("  JoyA center: %d, %d\n", joyA_X_.center, joyA_Y_.center);
+    Serial.printf("  JoyB center: %d, %d\n", joyB_X_.center, joyB_Y_.center);
+}
+
+void InputManager::setJoystickFiltering(bool enable) {
+    filteringEnabled_ = enable;
+}
+
+bool InputManager::isJoystickFilteringEnabled() const {
+    return filteringEnabled_;
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+float InputManager::readJoystickAxis(uint8_t pin, JoystickCalibration& cal) const {
+    int raw = analogRead(pin);
+
+    // Auto-calibrate center on first read
+    if (!cal.initialized) {
+        cal.center = raw;
+        cal.initialized = true;
+        cal.filtered = 0.0f;
+    }
+
+    // Calculate delta from center
+    int delta = raw - cal.center;
+
+    // Apply deadzone (absolute pixel deadzone)
+    const int deadzonePixels = static_cast<int>(deadzone_ * 2048.0f);
+    if (abs(delta) <= deadzonePixels) {
+        // Within deadzone - slowly update center to reduce drift
+        cal.center = (cal.center * 15 + raw) / 16;
+        return 0.0f;
+    }
+
+    // Close to center - update center more aggressively
+    if (abs(delta) < deadzonePixels * 3) {
+        cal.center = (cal.center * 31 + raw) / 32;
+    }
+
+    // Calculate normalized value (-1.0 to +1.0)
+    float range = delta > 0 ? (4095 - cal.center) : cal.center;
+    if (range < 1.0f) range = 1.0f;
+    float value = delta / range;
+
+    // Apply sensitivity
+    value *= sensitivity_;
+
+    // Clamp to valid range
+    value = constrain(value, -1.0f, 1.0f);
+
+    // Apply low-pass filter if enabled
+    if (filteringEnabled_) {
+        cal.filtered = cal.filtered * (1.0f - kFilterAlpha) + value * kFilterAlpha;
+        value = cal.filtered;
+    }
+
+    return value;
+}
+
+void InputManager::updateButtonState(ButtonState& state, uint8_t pin) {
+    uint32_t now = millis();
+
+    // Update previous state
+    state.previous = state.current;
+
+    // Read current state with debouncing
+    bool reading = digitalRead(pin) == LOW;
+
+    if (reading != state.current) {
+        if (now - state.lastChangeTime >= kDebounceMs) {
+            state.current = reading;
+            state.lastChangeTime = now;
+        }
+    }
+}

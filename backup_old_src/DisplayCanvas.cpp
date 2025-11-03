@@ -4,6 +4,7 @@
  */
 
 #include "DisplayCanvas.h"
+#include "IconLibrary.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cmath>
@@ -170,6 +171,18 @@ void DisplayCanvas::drawIcon(int16_t x, int16_t y, uint16_t iconCode) {
     setFont(ICON_SMALL);
     u8g2_.setCursor(x, y);
     u8g2_.print(static_cast<char>(iconCode));
+}
+
+bool DisplayCanvas::drawIconByID(int16_t x, int16_t y, const char* iconId) {
+    // Look up icon in IconLibrary
+    const Icon* icon = IconLibrary::getIcon(iconId);
+    if (icon == nullptr) {
+        return false;
+    }
+
+    // Draw bitmap using U8G2's XBM function
+    u8g2_.drawXBM(x, y, icon->width, icon->height, icon->data);
+    return true;
 }
 
 // ============================================================================

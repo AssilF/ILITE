@@ -7,6 +7,7 @@
  */
 
 #include "MinimalRobot.h"
+#include <ILITE.h>
 
 // ============================================================================
 // Module Registration - This is all you need!

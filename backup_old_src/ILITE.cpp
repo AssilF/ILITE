@@ -10,6 +10,14 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <ArduinoOTA.h>
+#include <Wire.h>
+
+// Extension systems (optional)
+#include "IconLibrary.h"
+#include "AudioRegistry.h"
+#include "MenuRegistry.h"
+#include "ScreenRegistry.h"
+#include "ControlBindingSystem.h"
 
 // ============================================================================
 // Global Instances
@@ -69,7 +77,7 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
     Serial.println("=====================================");
 
     // Step 1: Initialize hardware
-    Serial.println("\n[1/6] Initializing hardware...");
+    Serial.println("\n[1/7] Initializing hardware...");
     if (!initHardware()) {
         Serial.println("ERROR: Hardware initialization failed!");
         return false;
@@ -77,7 +85,7 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
     Serial.println("  ✓ Hardware initialized");
 
     // Step 2: Initialize packet router
-    Serial.println("\n[2/6] Initializing packet router...");
+    Serial.println("\n[2/7] Initializing packet router...");
     if (!PacketRouter::getInstance().begin()) {
         Serial.println("ERROR: PacketRouter initialization failed!");
         return false;
@@ -85,7 +93,7 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
     Serial.println("  ✓ Packet router initialized");
 
     // Step 3: Initialize modules
-    Serial.println("\n[3/6] Initializing modules...");
+    Serial.println("\n[3/7] Initializing modules...");
     if (!initModules()) {
         Serial.println("ERROR: Module initialization failed!");
         return false;
@@ -93,7 +101,7 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
     Serial.printf("  ✓ %zu modules initialized\n", ModuleRegistry::getModuleCount());
 
     // Step 4: Create FreeRTOS tasks
-    Serial.println("\n[4/6] Creating FreeRTOS tasks...");
+    Serial.println("\n[4/7] Creating FreeRTOS tasks...");
     if (!createTasks()) {
         Serial.println("ERROR: Task creation failed!");
         return false;
@@ -102,24 +110,31 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
 
     // Step 5: Initialize OTA if enabled
     if (config_.enableOTA) {
-        Serial.println("\n[5/6] Initializing OTA...");
+        Serial.println("\n[5/7] Initializing OTA...");
         if (!initOTA()) {
             Serial.println("WARNING: OTA initialization failed (continuing anyway)");
         } else {
             Serial.println("  ✓ OTA initialized");
         }
     } else {
-        Serial.println("\n[5/6] OTA disabled (skipped)");
+        Serial.println("\n[5/7] OTA disabled (skipped)");
     }
 
     // Step 6: Start discovery
     if (config_.enableDiscovery) {
-        Serial.println("\n[6/6] Starting ESP-NOW discovery...");
+        Serial.println("\n[6/7] Starting ESP-NOW discovery...");
         discovery.setDiscoveryEnabled(true);
         Serial.println("  ✓ Discovery enabled");
     } else {
-        Serial.println("\n[6/6] Discovery disabled (skipped)");
+        Serial.println("\n[6/7] Discovery disabled (skipped)");
     }
+
+    // Step 7: Initialize extension systems (optional, non-breaking)
+    Serial.println("\n[7/7] Initializing extension systems...");
+    IconLibrary::initBuiltInIcons();
+    MenuRegistry::initBuiltInMenus();
+    ControlBindingSystem::begin();
+    Serial.println("  ✓ Extension systems initialized");
 
     initialized_ = true;
 
@@ -385,26 +400,32 @@ void ILITEFramework::displayTask(void* parameter) {
         DisplayCanvas& canvas = *framework->displayCanvas_;
         ILITEModule* module = framework->activeModule_;
 
-        canvas.clear();
-
-        if (module != nullptr && framework->paired_) {
-            // Module is active and paired - draw its dashboard
-            module->drawDashboard(canvas);
-        } else if (module != nullptr) {
-            // Module active but not paired
-            canvas.setFont(DisplayCanvas::NORMAL);
-            canvas.drawTextCentered(28, module->getModuleName());
-            canvas.setFont(DisplayCanvas::SMALL);
-            canvas.drawTextCentered(40, "Waiting to pair...");
+        // Update and draw custom screen if active (extension system)
+        if (ScreenRegistry::hasActiveScreen()) {
+            ScreenRegistry::updateActiveScreen();
+            ScreenRegistry::drawActiveScreen(canvas);
         } else {
-            // No module active - show module selection screen
-            canvas.setFont(DisplayCanvas::NORMAL);
-            canvas.drawTextCentered(20, "ILITE Framework");
-            canvas.setFont(DisplayCanvas::SMALL);
-            canvas.drawTextCentered(35, "No active module");
+            canvas.clear();
 
-            size_t moduleCount = ModuleRegistry::getModuleCount();
-            canvas.drawTextF(4, 50, "%zu modules registered", moduleCount);
+            if (module != nullptr && framework->paired_) {
+                // Module is active and paired - draw its dashboard
+                module->drawDashboard(canvas);
+            } else if (module != nullptr) {
+                // Module active but not paired
+                canvas.setFont(DisplayCanvas::NORMAL);
+                canvas.drawTextCentered(28, module->getModuleName());
+                canvas.setFont(DisplayCanvas::SMALL);
+                canvas.drawTextCentered(40, "Waiting to pair...");
+            } else {
+                // No module active - show module selection screen
+                canvas.setFont(DisplayCanvas::NORMAL);
+                canvas.drawTextCentered(20, "ILITE Framework");
+                canvas.setFont(DisplayCanvas::SMALL);
+                canvas.drawTextCentered(35, "No active module");
+
+                size_t moduleCount = ModuleRegistry::getModuleCount();
+                canvas.drawTextF(4, 50, "%zu modules registered", moduleCount);
+            }
         }
 
         canvas.sendBuffer();
@@ -440,6 +461,9 @@ void ILITEFramework::update() {
     if (paired_) {
         handleConnectionTimeout();
     }
+
+    // Update control bindings (extension system)
+    ControlBindingSystem::update();
 
     // Update audio feedback
     if (config_.enableAudio) {

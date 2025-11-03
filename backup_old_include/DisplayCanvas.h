@@ -270,6 +270,24 @@ public:
      */
     void drawIcon(int16_t x, int16_t y, uint16_t iconCode);
 
+    /**
+     * @brief Draw icon from IconLibrary by ID
+     *
+     * Looks up icon in IconLibrary and draws bitmap at specified position.
+     *
+     * @param x X coordinate (top-left)
+     * @param y Y coordinate (top-left)
+     * @param iconId Icon identifier (e.g., ICON_DRONE, ICON_BATTERY_FULL)
+     * @return true if icon found and drawn, false if not found
+     *
+     * @example
+     * ```cpp
+     * canvas.drawIconByID(0, 0, ICON_DRONE);
+     * canvas.drawIconByID(112, 0, ICON_BATTERY_FULL);
+     * ```
+     */
+    bool drawIconByID(int16_t x, int16_t y, const char* iconId);
+
     // ========================================================================
     // Widgets
     // ========================================================================

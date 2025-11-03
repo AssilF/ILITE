@@ -45,11 +45,12 @@ public:
     }
 
     const char** getDetectionKeywords() const override {
-        DETECTION_KEYWORDS("minimal", "minirobot");
+        static const char* keywords[] = {"minimal", "minirobot"};
+        return keywords;
     }
 
     size_t getDetectionKeywordCount() const override {
-        DETECTION_KEYWORD_COUNT("minimal", "minirobot");
+        return 2;  // Number of keywords in getDetectionKeywords()
     }
 
     // ========================================================================
