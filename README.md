@@ -344,7 +344,7 @@ ASCE Robotics Team
 ## 📞 Contact
 
 - **GitHub Issues**: [Report bugs or request features](https://github.com/yourusername/ILITE/issues)
-- **Email**: your.email@example.com
+- **Email**: eAssilFer@gmail.com
 
 ---
 
