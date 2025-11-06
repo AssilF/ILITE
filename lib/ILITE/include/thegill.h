@@ -82,4 +82,5 @@ extern ThegillRuntime thegillRuntime;
 extern ThegillTelemetryPacket thegillTelemetryPacket;
 
 float applyEasingCurve(GillEasing mode, float t);
+void updateThegillControl();
 

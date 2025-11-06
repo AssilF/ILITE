@@ -18,6 +18,7 @@
 #include "MenuRegistry.h"
 #include "ScreenRegistry.h"
 #include "ControlBindingSystem.h"
+#include "FrameworkEngine.h"
 
 // ============================================================================
 // Global Instances
@@ -58,7 +59,8 @@ ILITEFramework::ILITEFramework()
       displayTaskHandle_(nullptr),
       u8g2_(nullptr),
       displayCanvas_(nullptr),
-      discovery_(nullptr)
+      discovery_(nullptr),
+      frameworkEngine_(&FrameworkEngine::getInstance())
 {
     instance_ = this;
 }
@@ -225,6 +227,10 @@ bool ILITEFramework::initHardware() {
         audioPlayStartup();
     }
 
+    // Initialize Framework Engine (v2.0)
+    Serial.println("  - FrameworkEngine...");
+    frameworkEngine_->begin();
+
     return true;
 }
 
@@ -350,6 +356,9 @@ void ILITEFramework::commTask(void* parameter) {
         float dt = (now - lastLoopTime) / 1000.0f;
         lastLoopTime = now;
 
+        // Update Framework Engine (button events, encoder, etc)
+        framework->frameworkEngine_->update();
+
         // Get active module
         ILITEModule* module = framework->activeModule_;
 
@@ -405,27 +414,9 @@ void ILITEFramework::displayTask(void* parameter) {
             ScreenRegistry::updateActiveScreen();
             ScreenRegistry::drawActiveScreen(canvas);
         } else {
+            // Use FrameworkEngine v2.0 rendering system
             canvas.clear();
-
-            if (module != nullptr && framework->paired_) {
-                // Module is active and paired - draw its dashboard
-                module->drawDashboard(canvas);
-            } else if (module != nullptr) {
-                // Module active but not paired
-                canvas.setFont(DisplayCanvas::NORMAL);
-                canvas.drawTextCentered(28, module->getModuleName());
-                canvas.setFont(DisplayCanvas::SMALL);
-                canvas.drawTextCentered(40, "Waiting to pair...");
-            } else {
-                // No module active - show module selection screen
-                canvas.setFont(DisplayCanvas::NORMAL);
-                canvas.drawTextCentered(20, "ILITE Framework");
-                canvas.setFont(DisplayCanvas::SMALL);
-                canvas.drawTextCentered(35, "No active module");
-
-                size_t moduleCount = ModuleRegistry::getModuleCount();
-                canvas.drawTextF(4, 50, "%zu modules registered", moduleCount);
-            }
+            framework->frameworkEngine_->render(canvas);
         }
 
         canvas.sendBuffer();
@@ -487,6 +478,7 @@ void ILITEFramework::handlePairing() {
     // Check if we just became paired
     if (discovery.isPaired() && !paired_) {
         paired_ = true;
+        frameworkEngine_->setPaired(true);  // Sync with FrameworkEngine
         lastTelemetryTime_ = millis();
 
         const Identity* peerIdentity = discovery.getPairedIdentity();
@@ -542,6 +534,9 @@ void ILITEFramework::setActiveModule(ILITEModule* module) {
     // Set new active module
     activeModule_ = module;
     previousModule_ = activeModule_;
+
+    // Sync with FrameworkEngine
+    frameworkEngine_->loadModule(module);
 
     // Update packet router
     PacketRouter::getInstance().setActiveModule(module);
@@ -601,6 +596,7 @@ void ILITEFramework::unpair() {
     }
 
     paired_ = false;
+    frameworkEngine_->setPaired(false);  // Sync with FrameworkEngine
     lastTelemetryTime_ = 0;
     discovery.resetLinkState();
 

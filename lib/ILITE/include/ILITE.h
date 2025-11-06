@@ -44,11 +44,16 @@
 #include "DisplayCanvas.h"
 #include "PacketRouter.h"
 #include "ILITEHelpers.h"
+#include "InverseKinematics.h"
 #include "AudioRegistry.h"
 
 // Forward declarations for existing subsystems
 class EspNowDiscovery;
 class AudioFeedback;
+class FrameworkEngine;
+
+// Built-in module registration (called from ILITEFramework::begin)
+void registerBuiltInModules();
 
 /**
  * @struct ILITEConfig
@@ -247,6 +252,14 @@ public:
      */
     bool activateModuleByName(const char* moduleName);
 
+    /**
+     * @brief Register an additional module at runtime.
+     *
+     * Call before or after begin(); if the framework is already running the
+     * module's onInit() will be executed immediately.
+     */
+    bool registerModule(ILITEModule& module);
+
     // ========================================================================
     // Pairing Management
     // ========================================================================
@@ -292,6 +305,12 @@ public:
      */
     bool isInitialized() const;
 
+    /**
+     * @brief Get discovery system reference
+     * @return Reference to ESP-NOW discovery system
+     */
+    EspNowDiscovery& getDiscovery();
+
     // ========================================================================
     // Statistics
     // ========================================================================
@@ -307,6 +326,11 @@ public:
      * @return Number of packets received via ESP-NOW since boot
      */
     uint32_t getPacketRxCount() const;
+
+    /**
+     * @brief Internal hook used by PacketRouter when telemetry arrives.
+     */
+    void onTelemetryReceived(ILITEModule* module);
 
 private:
     /**
@@ -394,6 +418,11 @@ private:
      */
     void handleOTA();
 
+    /**
+     * @brief Handle input events for the home screen while unpaired
+     */
+    void handleHomeScreenInput();
+
     // ========================================================================
     // Member Variables
     // ========================================================================
@@ -432,15 +461,19 @@ private:
     U8G2* u8g2_;
     DisplayCanvas* displayCanvas_;
     EspNowDiscovery* discovery_;
+
+    /// Framework Engine (v2.0)
+    class FrameworkEngine* frameworkEngine_;
 };
 
 /**
  * @brief Global ILITE framework instance
  *
- * Users access the framework through this global instance:
+ * Clean, simple access to the framework:
  * ```cpp
- * ILITE.begin();
+ * ILITE.begin(config);
  * ILITE.update();
+ * ILITE.activateModuleById("com.example.myrobot");
  * ```
  */
 extern ILITEFramework& ILITE;

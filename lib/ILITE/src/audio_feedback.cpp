@@ -75,3 +75,7 @@ void audioUpdate(){
     stopTone();
   }
 }
+
+void audioPlayTone(uint16_t frequencyHz, uint16_t durationMs){
+  startTone({frequencyHz, durationMs});
+}

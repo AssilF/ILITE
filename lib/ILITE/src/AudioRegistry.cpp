@@ -53,10 +53,10 @@ bool AudioRegistry::play(const char* name) {
                 return true;
             }
 
-            // Play simple tone using cue's frequency and duration
-            // TODO: Integrate with audio_feedback.h tone system
-            // For now, log the playback (actual tone generation needs hardware integration)
-            Logger::getInstance().logf("Playing audio: %s (%uHz, %ums)", name, cue.frequencyHz, cue.durationMs);
+            // Play simple tone using audio hardware
+            audioPlayTone(cue.frequencyHz, cue.durationMs);
+            Serial.printf("[AudioRegistry] Playing: %s (%uHz, %ums)\n",
+                          name, cue.frequencyHz, cue.durationMs);
             return true;
         }
     }

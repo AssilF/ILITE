@@ -4,6 +4,7 @@
  */
 
 #include "PacketRouter.h"
+#include "ILITE.h"
 #include "ILITEHelpers.h"
 #include <cstring>
 
@@ -148,6 +149,7 @@ bool PacketRouter::tryRouteToModule(ILITEModule* module, const uint8_t* data, si
 
         // Valid packet - route to module
         module->handleTelemetry(i, data, length);
+        ILITEFramework::getInstance().onTelemetryReceived(module);
 
         // Log first packet of each type (for debugging)
         static uint32_t loggedTypes[8] = {0};  // Track first 8 types

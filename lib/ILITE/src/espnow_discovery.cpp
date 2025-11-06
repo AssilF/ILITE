@@ -65,6 +65,16 @@ void logMac(const char* prefix, const uint8_t* mac) {
 
 }  // namespace
 
+// Global pointer for static callback access
+static EspNowDiscovery* g_discoveryInstance = nullptr;
+
+// Static ESP-NOW receive callback (forwards to instance method)
+static void onEspNowDataRecv(const uint8_t* mac, const uint8_t* incomingData, int len) {
+    if (g_discoveryInstance != nullptr) {
+        g_discoveryInstance->handleIncoming(mac, incomingData, len);
+    }
+}
+
 void EspNowDiscovery::begin() {
     WiFi.mode(WIFI_AP_STA);
     WiFi.setTxPower(WIFI_POWER_19_5dBm);
@@ -83,6 +93,11 @@ void EspNowDiscovery::begin() {
     connectionLogAdd("Role: controlled");
 #endif
     connectionLogAddf("Identity: %s/%s", selfIdentity.customId, selfIdentity.deviceType);
+
+    // Register ESP-NOW receive callback
+    g_discoveryInstance = this;
+    esp_now_register_recv_cb(onEspNowDataRecv);
+    Serial.println("[ESP-NOW] Receive callback registered");
 
     // Register the broadcast peer if it is not already present.
     if (!esp_now_is_peer_exist(kBroadcastMac)) {
@@ -121,23 +136,27 @@ void EspNowDiscovery::discover() {
     pruneExpiredPeers(now);
 
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
-    bool pairingMenuActive = (displayMode == DISPLAY_MODE_PAIRING);
-    bool pairingInfoActive = (displayMode == DISPLAY_MODE_PEER_INFO);
-    bool pairingFlowActive = pairingMenuActive || pairingInfoActive;
-    bool allowBroadcast = discoveryEnabled || pairingMenuActive;
+    // Note: Old display mode system removed - now using discoveryEnabled flag
+    bool allowBroadcast = discoveryEnabled;
     bool shouldBroadcast = allowBroadcast && !link.paired;
+
     if (shouldBroadcast && now - lastBroadcastMs >= BROADCAST_INTERVAL_MS) {
+        char mac[24];
+        macLabel(kBroadcastMac, mac, sizeof(mac));
+        Serial.printf("[ESP-NOW] Broadcasting PAIR_REQ to %s\n", mac);
         sendPacket(MessageType::MSG_PAIR_REQ, kBroadcastMac);
         lastBroadcastMs = now;
     }
 
-    bool autoPairEnabled = discoveryEnabled && !pairingFlowActive;
+    // Auto-pair with first discovered device
+    bool autoPairEnabled = discoveryEnabled;
     if (autoPairEnabled && !link.paired) {
         int targetIndex = selectTarget();
         if (targetIndex >= 0) {
             PeerEntry& target = peers[targetIndex];
             bool shouldConfirm = !target.confirmed || now - link.lastConfirmSentMs >= BROADCAST_INTERVAL_MS;
             if (shouldConfirm) {
+                Serial.printf("[ESP-NOW] Auto-pairing with device index %d\n", targetIndex);
                 beginPairingWith(target.mac);
             }
         }
@@ -166,11 +185,18 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
     MessageType type = packet->type;
     logRx(type, mac);
 
+    // Serial logging for RX (similar to TX logging)
+    Serial.printf("[RX] Received %s (%d bytes) from %02X:%02X:%02X:%02X:%02X:%02X\n",
+        messageTypeToString(type), len,
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
     if (len < static_cast<int>(sizeof(Packet))) {
+        Serial.printf("[ESP-NOW] Packet too small: %d < %d bytes\n", len, sizeof(Packet));
         return false;
     }
 
     if (packet->version != kProtocolVersion) {
+        Serial.printf("[ESP-NOW] Protocol version mismatch: %d != %d\n", packet->version, kProtocolVersion);
         return false;
     }
 

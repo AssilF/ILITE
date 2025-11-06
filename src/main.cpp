@@ -19,6 +19,9 @@
 #include <AudioRegistry.h>
 #include <ControlBindingSystem.h>
 #include <MenuRegistry.h>
+#include <UIComponents.h>
+#include <audio_feedback.h>   // For audioUpdate() to stop tones
+
 
 // ============================================================================
 // Configuration
@@ -40,6 +43,64 @@ const char* WIFI_PASSWORD = "ASCE321#";
 
 // ============================================================================
 // Setup
+class MyRobot : public ILITEModule {
+public:
+    // Required metadata
+    const char* getModuleId() const override { return "com.myrobot"; }
+    const char* getModuleName() const override { return "My Robot"; }
+    const char* getVersion() const override { return "1.0.0"; }
+
+    // Packet definitions
+    size_t getCommandPacketTypeCount() const override { return 1; }
+    PacketDescriptor getCommandPacketDescriptor(size_t index) const override {
+        return {"Command", 0x12345678, sizeof(Command), sizeof(Command), true, nullptr, 0};
+    }
+
+    size_t getTelemetryPacketTypeCount() const override { return 1; }
+    PacketDescriptor getTelemetryPacketDescriptor(size_t index) const override {
+        return {"Telemetry", 0x87654321, sizeof(Telemetry), sizeof(Telemetry), true, nullptr, 0};
+    }
+
+    // Control loop (50Hz)
+    void updateControl(const InputManager& inputs, float dt) override {
+        command_.throttle = inputs.getJoystickA_Y();
+        command_.steering = inputs.getJoystickB_X();
+    }
+
+    size_t prepareCommandPacket(size_t index, uint8_t* buffer, size_t size) override {
+        memcpy(buffer, &command_, sizeof(command_));
+        return sizeof(command_);
+    }
+
+    void handleTelemetry(size_t index, const uint8_t* data, size_t length) override {
+        memcpy(&telemetry_, data, sizeof(telemetry_));
+    }
+
+    // Display (10Hz)
+    void drawDashboard(DisplayCanvas& canvas) override {
+        UIComponents::drawModernHeader(canvas, "My Robot", ICON_ROBOT, telemetry_.battery, 4);
+        canvas.drawProgressBar(10, 20, 100, 8, telemetry_.battery / 100.0f, "Battery");
+    }
+
+private:
+    struct Command {
+        uint32_t magic = 0x12345678;
+        float throttle;
+        float steering;
+    } __attribute__((packed));
+
+    struct Telemetry {
+        uint32_t magic = 0x87654321;
+        uint8_t battery;
+    } __attribute__((packed));
+
+    Command command_;
+    Telemetry telemetry_;
+};
+
+// Register the module
+REGISTER_MODULE(MyRobot);
+
 // ============================================================================
 
 void setup() {
@@ -52,6 +113,9 @@ void setup() {
     Serial.println("  Framework-based Architecture");
     Serial.println("==========================================\n");
 
+
+
+    
     // Register custom audio cues (before framework init)
     AudioRegistry::registerCue({"startup", 1000, 200});
     AudioRegistry::registerCue({"paired", 1200, 150});
@@ -81,10 +145,10 @@ void setup() {
     // Register custom control bindings (after framework init)
     // Example: Play sound on button 3 press
     ControlBinding binding1;
-    binding1.input = INPUT_BUTTON3;
+    binding1.input = INPUT_BUTTON2;
     binding1.event = EVENT_CLICK;
     binding1.action = []() {
-        AudioRegistry::play("menu_select");
+        AudioRegistry::play("startup");
     };
     binding1.condition = nullptr;
     binding1.screenId = nullptr;
@@ -94,7 +158,7 @@ void setup() {
 
     // Example: Emergency stop on long press (2+ seconds) of button 1
     ControlBinding binding2;
-    binding2.input = INPUT_BUTTON1;
+    binding2.input = INPUT_BUTTON2;
     binding2.event = EVENT_LONG_PRESS;
     binding2.action = []() {
         AudioRegistry::play("error");
@@ -120,9 +184,6 @@ void setup() {
     Serial.println("  - Modern OLED UI");
     Serial.println("  - OTA firmware updates");
     Serial.println("\nWaiting for module pairing...\n");
-
-    // Play startup sound
-    AudioRegistry::play("startup");
 }
 
 // ============================================================================
@@ -132,6 +193,9 @@ void setup() {
 void loop() {
     // Update framework (handles all tasks, communication, display, input)
     ILITE.update();
+
+    // Update audio system to stop tones properly
+    audioUpdate();
 
     // Optional: Add custom logic here if needed
     // All module-specific logic should be in the module classes

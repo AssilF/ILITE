@@ -16,6 +16,8 @@
 #include <functional>
 #include <vector>
 
+#include "ModuleMenu.h"
+
 // Forward declarations
 class DisplayCanvas;
 class InputManager;
@@ -170,6 +172,16 @@ public:
      * @return Count of strings returned by getDetectionKeywords()
      */
     virtual size_t getDetectionKeywordCount() const { return 0; }
+
+    /**
+     * @brief Get module logo bitmap (32x32 XBM format)
+     *
+     * Returns a pointer to a 128-byte XBM bitmap (32x32 pixels).
+     * Used in module browser cards. If nullptr, a generic icon is shown.
+     *
+     * @return Pointer to XBM bitmap data, or nullptr for generic icon
+     */
+    virtual const uint8_t* getLogo32x32() const { return nullptr; }
 
     // ========================================================================
     // Packet Management (REQUIRED)
@@ -350,6 +362,15 @@ public:
     virtual void drawDashboard(DisplayCanvas& canvas) = 0;
 
     /**
+     * @brief Build per-module menu structure.
+     *
+     * Override this to register custom menu entries (actions, toggles, sub-pages)
+     * that appear when the encoder button is pressed while the module is active.
+     * The builder is cleared on entry.
+     */
+    virtual void buildModuleMenu(ModuleMenuBuilder& builder) {}
+
+    /**
      * @brief Render home screen card (module selector)
      *
      * Draw a card representing this module on the home screen.
@@ -423,6 +444,56 @@ public:
      * @param buttonSlot Button index (0-2 for buttons 1-3)
      */
     virtual void onFunctionButton(size_t buttonSlot);
+
+    // ========================================================================
+    // Button Event Handling (ILITE v2.0 - Event Engine)
+    // ========================================================================
+
+    /**
+     * @brief Handle button event for physical button
+     *
+     * Called by ButtonEventEngine when button state changes.
+     * Supports: PRESSED, HELD, RELEASED, LONG_PRESS events.
+     *
+     * @param buttonIndex Button index (0=button1, 1=button2, 2=button3)
+     * @param event Button event type
+     */
+    virtual void onButtonEvent(size_t buttonIndex, int event) {}
+
+    // ========================================================================
+    // Encoder Functions (Top Strip Software Buttons)
+    // ========================================================================
+
+    /**
+     * @brief Get number of encoder functions (0-2)
+     *
+     * Encoder functions appear as software buttons in the top strip
+     * that can be selected via encoder rotation and activated by pressing.
+     *
+     * @return Number of encoder functions (0=none, 1=F1 only, 2=F1+F2)
+     */
+    virtual size_t getEncoderFunctionCount() const { return 0; }
+
+    /**
+     * @brief Get encoder function definition
+     *
+     * Define custom buttons for the top strip (F1, F2).
+     * User selects them with encoder rotation, activates with encoder press.
+     *
+     * Example:
+     * ```cpp
+     * EncoderFunction getEncoderFunction(size_t index) const override {
+     *     if (index == 0) {
+     *         return {"ARM", "Arm Motors", [this]() { armMotors(); }, true, &armed_};
+     *     }
+     *     return {};
+     * }
+     * ```
+     *
+     * @param index Function index (0=F1, 1=F2)
+     * @return EncoderFunction struct (from FrameworkEngine.h)
+     */
+    virtual void getEncoderFunction(size_t index, void* funcOut) const {}
 
     // ========================================================================
     // Configuration & Persistence (OPTIONAL)
@@ -553,6 +624,7 @@ private:
     friend class ModuleRegistry;
     friend class PacketRouter;
     friend class DisplayManager;
+    friend class ILITEFramework;
 
     // Framework-internal state (do not access directly)
     bool initialized_ = false;
