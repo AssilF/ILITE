@@ -142,6 +142,24 @@ public:
      */
     uint16_t getPotentiometer_Raw() const;
 
+    /**
+     * @brief Get battery voltage (after voltage divider correction)
+     * @return Voltage in volts
+     */
+    float getBatteryVoltage() const;
+
+    /**
+     * @brief Get battery percentage (Li-Po curve)
+     * @return Percentage 0-100
+     */
+    uint8_t getBatteryPercent() const;
+
+    /**
+     * @brief Get raw battery ADC value
+     * @return ADC value 0-4095
+     */
+    uint16_t getBatteryRaw() const;
+
     // ========================================================================
     // Digital Inputs (Current State)
     // ========================================================================

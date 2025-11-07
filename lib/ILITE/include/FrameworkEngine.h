@@ -16,10 +16,12 @@
 
 #pragma once
 #include <Arduino.h>
+#include <vector>
 #include "ButtonEventEngine.h"
 #include "ILITEModule.h"
 #include "DisplayCanvas.h"
 #include "AudioRegistry.h"
+#include "MenuRegistry.h"
 
 // Forward declarations
 class InputManager;
@@ -278,6 +280,36 @@ private:
     void renderDashboard(DisplayCanvas& canvas);
 
     /**
+     * @brief Render framework menu when open
+     */
+    void renderMenu(DisplayCanvas& canvas);
+
+    /**
+     * @brief Register default menu entries (Terminal, Devices, Settings)
+     */
+    void registerDefaultMenuEntries();
+
+    /**
+     * @brief Handle menu navigation (encoder)
+     */
+    void navigateMenu(int delta);
+
+    /**
+     * @brief Activate currently selected menu entry
+     */
+    void activateMenuSelection();
+
+    /**
+     * @brief Return to previous menu level or close menu
+     */
+    void menuGoBack();
+
+    /**
+     * @brief Get current menu identifier (nullptr = root)
+     */
+    MenuID currentMenuId() const;
+
+    /**
      * @brief Render generic dashboard (no module loaded)
      *
      * @param canvas Display canvas
@@ -313,6 +345,9 @@ private:
 
     // Menu state
     bool menuOpen_;
+    std::vector<MenuID> menuStack_;
+    int menuSelection_;
+    int menuScrollOffset_;
 
     // Status
     uint8_t batteryPercent_;

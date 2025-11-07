@@ -10,7 +10,11 @@
 #include "DisplayCanvas.h"
 #include "ModuleRegistry.h"
 #include "AudioRegistry.h"
+#include "connection_log.h"
+#include "espnow_discovery.h"
 #include <Arduino.h>
+
+extern EspNowDiscovery discovery;
 
 namespace DefaultActions {
 
@@ -82,95 +86,171 @@ void closeActiveScreen() {
     }
 }
 
+bool hasActiveScreen() {
+    return currentScreen != ActiveScreen::NONE;
+}
+
+const char* getActiveScreenTitle() {
+    switch (currentScreen) {
+        case ActiveScreen::TERMINAL:
+            return "TERMINAL";
+        case ActiveScreen::DEVICES:
+            return "DEVICES";
+        case ActiveScreen::SETTINGS:
+            return "SETTINGS";
+        default:
+            return nullptr;
+    }
+}
+
+void renderActiveScreen(DisplayCanvas& canvas) {
+    switch (currentScreen) {
+        case ActiveScreen::TERMINAL:
+            renderTerminalScreen(canvas);
+            break;
+        case ActiveScreen::DEVICES:
+            renderDevicesScreen(canvas);
+            break;
+        case ActiveScreen::SETTINGS:
+            renderSettingsScreen(canvas);
+            break;
+        default:
+            break;
+    }
+}
+
 // ============================================================================
 // Rendering
 // ============================================================================
 
 void renderTerminalScreen(DisplayCanvas& canvas) {
-    canvas.setFont(DisplayCanvas::SMALL);
+    const int startY = 14;  // Below top strip
+    const int lineHeight = 7;  // Tiny font line height
+    const int maxCharsPerLine = 30;  // TINY font is 4px wide, 128/4 = 32, use 30 for margin
+    const int maxY = 64;  // Screen height
 
-    // Title
-    canvas.drawText(2, 10, "=== TERMINAL ===");
-    canvas.drawLine(0, 12, 127, 12);
+    // Get connection log entries
+    const int logCount = connectionLogGetCount();
 
-    // Terminal content (mock data for now)
-    // TODO: Integrate with actual Logger system
-    const char* logLines[] = {
-        "[INFO] System started",
-        "[INFO] Modules loaded: 4",
-        "[INFO] ESP-NOW initialized",
-        "[INFO] Scanning for devices...",
-        "[WARN] No devices found",
-        "[INFO] Display ready",
-        "[INFO] Audio ready"
-    };
-    const int lineCount = sizeof(logLines) / sizeof(logLines[0]);
+    canvas.setFont(DisplayCanvas::TINY);
 
-    int y = 22;
-    int displayLines = 5;
-    for (int i = scrollOffset; i < scrollOffset + displayLines && i < lineCount; i++) {
-        if (i == selectedItem) {
-            canvas.drawRect(0, y - 8, 128, 9,1);
-            canvas.setDrawColor(0);
-        }
-        canvas.drawText(2, y, logLines[i]);
-        if (i == selectedItem) {
-            canvas.setDrawColor(1);
-        }
-        y += 10;
+    if (logCount == 0) {
+        canvas.drawText(2, startY, "No log entries yet");
+        return;
     }
 
-    // Footer
-    canvas.setFont(DisplayCanvas::TINY);
-    canvas.drawText(2, 62, "Encoder:Scroll | Btn:Close");
+    int y = startY;
+    int linesDisplayed = 0;
+    int linesToSkip = scrollOffset;  // Number of wrapped lines to skip
+
+    // Show newest entries first (reverse order)
+    for (int i = logCount - 1; i >= 0 && y < maxY; i--) {
+        const char* entry = connectionLogGetEntry(i);
+        if (!entry || entry[0] == '\0') continue;
+
+        // Wrap this entry into multiple lines
+        int entryLen = strlen(entry);
+        int startPos = 0;
+
+        while (startPos < entryLen && y < maxY) {
+            // Find end of this line (word wrap)
+            int lineLen = maxCharsPerLine;
+            if (startPos + lineLen > entryLen) {
+                lineLen = entryLen - startPos;
+            } else {
+                // Try to break at a space for word wrapping
+                int lastSpace = -1;
+                for (int j = 0; j < lineLen && (startPos + j) < entryLen; j++) {
+                    if (entry[startPos + j] == ' ') {
+                        lastSpace = j;
+                    }
+                }
+                if (lastSpace > lineLen / 2) {  // Only break at space if it's not too early
+                    lineLen = lastSpace + 1;  // Include the space
+                }
+            }
+
+            // Skip lines for scrolling
+            if (linesToSkip > 0) {
+                linesToSkip--;
+            } else {
+                // Draw this line
+                char lineBuf[32];
+                int copyLen = (lineLen < 31) ? lineLen : 31;
+                strncpy(lineBuf, entry + startPos, copyLen);
+                lineBuf[copyLen] = '\0';
+
+                canvas.drawText(2, y, lineBuf);
+                y += lineHeight;
+                linesDisplayed++;
+            }
+
+            startPos += lineLen;
+        }
+    }
 }
 
 void renderDevicesScreen(DisplayCanvas& canvas) {
+    const int startY = 14;  // Below top strip
+    int y = startY;
+
+    // Get discovered devices
+    const int deviceCount = discovery.getPeerCount();
+    const int pairedIndex = discovery.getPairedPeerIndex();
+
     canvas.setFont(DisplayCanvas::SMALL);
 
-    // Title
-    canvas.drawText(2, 10, "=== DEVICES ===");
-    canvas.drawLine(0, 12, 127, 12);
+    if (deviceCount == 0) {
+        // No devices found
+        canvas.drawText(2, y, "Scanning for devices...");
+        y += 12;
+        canvas.setFont(DisplayCanvas::TINY);
+        canvas.drawText(2, y, "Make sure remote device");
+        y += 9;
+        canvas.drawText(2, y, "is powered on and in");
+        y += 9;
+        canvas.drawText(2, y, "discovery mode.");
+    } else {
+        // Display discovered devices
+        for (int i = 0; i < deviceCount && y < 60; i++) {
+            const char* deviceName = discovery.getPeerName(i);
+            const uint8_t* deviceMac = discovery.getPeer(i);
+            bool isPaired = (i == pairedIndex);
+            bool isSelected = (i == selectedItem);
 
-    // Device list (mock data for now)
-    // TODO: Integrate with actual ESP-NOW discovery
-    const char* devices[] = {
-        "DroneGaze-01",
-        "TheGill-Alpha",
-        "Bulky-Test",
-        "No devices found..."
-    };
-    const int deviceCount = 4;
+            if (isSelected) {
+                canvas.drawRect(0, y - 8, 128, 10, 1);
+                canvas.setDrawColor(0);
+            }
 
-    int y = 22;
-    canvas.setFont(DisplayCanvas::NORMAL);
-    for (int i = 0; i < deviceCount && i < 4; i++) {
-        if (i == selectedItem) {
-            canvas.drawRect(0, y - 8, 128, 9,1);
-            canvas.setDrawColor(0);
+            // Status indicator
+            canvas.setFont(DisplayCanvas::NORMAL);
+            if (isPaired) {
+                canvas.drawText(2, y, "\x10");  // Paired indicator
+            } else {
+                canvas.drawText(2, y, ">");
+            }
+
+            // Device name
+            canvas.drawText(12, y, deviceName ? deviceName : "Unknown");
+
+            if (isSelected) {
+                canvas.setDrawColor(1);
+            }
+
+            y += 10;
         }
 
-        // Device icon
-        canvas.drawText(2, y, ">");
-        canvas.drawText(12, y, devices[i]);
-
-        if (i == selectedItem) {
-            canvas.setDrawColor(1);
-        }
-        y += 11;
+        // Device count indicator
+        canvas.setFont(DisplayCanvas::TINY);
+        y = 60;
+        canvas.drawTextF(2, y, "%d device%s found", deviceCount, (deviceCount == 1) ? "" : "s");
     }
-
-    // Footer
-    canvas.setFont(DisplayCanvas::TINY);
-    canvas.drawText(2, 62, "Encoder:Select | Btn:Pair");
 }
 
 void renderSettingsScreen(DisplayCanvas& canvas) {
-    canvas.setFont(DisplayCanvas::SMALL);
-
-    // Title
-    canvas.drawText(2, 10, "=== SETTINGS ===");
-    canvas.drawLine(0, 12, 127, 12);
+    const int startY = 14;  // Below top strip
+    int y = startY;
 
     // Settings menu items
     const char* settings[] = {
@@ -178,15 +258,14 @@ void renderSettingsScreen(DisplayCanvas& canvas) {
         "Audio Volume",
         "WiFi Settings",
         "System Info",
-        "Back"
+        "About ILITE"
     };
     const int settingCount = 5;
 
-    int y = 22;
-    canvas.setFont(DisplayCanvas::NORMAL);
-    for (int i = 0; i < settingCount && i < 4; i++) {
+    canvas.setFont(DisplayCanvas::SMALL);
+    for (int i = 0; i < settingCount && y < 60; i++) {
         if (i == selectedItem) {
-            canvas.drawRect(0, y - 8, 128, 9,1);
+            canvas.drawRect(0, y - 8, 128, 10, 1);
             canvas.setDrawColor(0);
         }
 
@@ -196,12 +275,8 @@ void renderSettingsScreen(DisplayCanvas& canvas) {
         if (i == selectedItem) {
             canvas.setDrawColor(1);
         }
-        y += 11;
+        y += 10;
     }
-
-    // Footer
-    canvas.setFont(DisplayCanvas::TINY);
-    canvas.drawText(2, 62, "Encoder:Select | Btn:Enter");
 }
 
 // ============================================================================
@@ -214,14 +289,30 @@ void handleEncoderRotate(int delta) {
         return;
     }
 
+    // For terminal, scroll through wrapped lines
+    if (currentScreen == ActiveScreen::TERMINAL) {
+        scrollOffset += delta;
+
+        // Allow generous scrolling (assume average 2 wrapped lines per log entry)
+        const int logCount = connectionLogGetCount();
+        const int maxScroll = logCount * 3;  // Allow scrolling through ~3x wrapped lines
+
+        if (scrollOffset < 0) {
+            scrollOffset = 0;
+        } else if (scrollOffset > maxScroll) {
+            scrollOffset = maxScroll;
+        }
+
+        AudioRegistry::play("menu_select");
+        return;
+    }
+
     // Update selected item based on active screen
     int maxItems = 0;
     switch (currentScreen) {
-        case ActiveScreen::TERMINAL:
-            maxItems = 7; // Mock log line count
-            break;
         case ActiveScreen::DEVICES:
-            maxItems = 4; // Mock device count
+            maxItems = discovery.getPeerCount();
+            if (maxItems == 0) maxItems = 1;  // At least 1 for "no devices"
             break;
         case ActiveScreen::SETTINGS:
             maxItems = 5; // Settings menu count
@@ -239,7 +330,7 @@ void handleEncoderRotate(int delta) {
         selectedItem = 0;
     }
 
-    // Update scroll offset if needed (for terminal)
+    // Update scroll offset if needed
     if (currentScreen == ActiveScreen::TERMINAL) {
         const int displayLines = 5;
         if (selectedItem < scrollOffset) {

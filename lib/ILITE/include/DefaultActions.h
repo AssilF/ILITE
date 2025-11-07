@@ -74,6 +74,27 @@ namespace DefaultActions {
     void closeActiveScreen();
 
     /**
+     * @brief Check if any default screen is active
+     * @return true if any default screen is showing
+     */
+    bool hasActiveScreen();
+
+    /**
+     * @brief Get the title of the currently active screen
+     * @return Screen title string, or nullptr if no screen is active
+     */
+    const char* getActiveScreenTitle();
+
+    /**
+     * @brief Render the currently active default screen
+     *
+     * Automatically calls the appropriate render function based on active screen
+     *
+     * @param canvas Display canvas to render to
+     */
+    void renderActiveScreen(DisplayCanvas& canvas);
+
+    /**
      * @brief Render terminal screen
      *
      * Internal function called by display engine when terminal is active

@@ -18,6 +18,33 @@
 #include <ScreenRegistry.h>
 #include <InputManager.h>
 #include <AudioRegistry.h>
+#include <UIComponents.h>
+#include <FrameworkEngine.h>
+#include <ILITE.h>
+#include <espnow_discovery.h>
+#include <cstring>
+#include <algorithm>
+#include <cmath>
+#include <string>
+#include <vector>
+
+namespace {
+std::vector<std::string> g_moduleMenuEntryIds;
+
+template <typename T>
+T clampValue(T value, T minValue, T maxValue) {
+    if (value < minValue) {
+        return minValue;
+    }
+    if (value > maxValue) {
+        return maxValue;
+    }
+    return value;
+}
+}
+
+bool controlSessionActive = false;
+uint8_t targetAddress[6] = {0};
 
 // Include platform module headers
 #include <thegill.h>
@@ -25,16 +52,6 @@
 #include <bulky.h>
 
 #include <cstring>
-
-// Forward declarations for original dashboard functions from display.cpp
-extern void drawThegillDashboard();
-extern void drawDrongazeDashboard();
-extern void drawBulkyDashboard();
-
-// Forward declarations for control update functions
-extern void updateThegillControl();
-extern void updateDrongazeControl();
-extern void updateBulkyControl();
 
 // ============================================================================
 // TheGill Module
@@ -65,6 +82,7 @@ public:
         static const char* keywords[] = {"gill", "thegill", "tgll"};
         return keywords;
     }
+
     size_t getDetectionKeywordCount() const override { return 3; }
     const uint8_t* getLogo32x32() const override { return thegill_logo_32x32; }
 
@@ -88,9 +106,30 @@ public:
 
     void onInit() override {
         thegillCommand.magic = THEGILL_PACKET_MAGIC;
-        thegillCommand.easingRate = 4.0f;
+        thegillCommand.leftFront = 0;
+        thegillCommand.leftRear = 0;
+        thegillCommand.rightFront = 0;
+        thegillCommand.rightRear = 0;
+        thegillCommand.flags = 0;
         thegillCommand.mode = GillMode::Default;
         thegillCommand.easing = kDefaultGillEasing;
+        thegillCommand.easingRate = 4.0f;
+
+        thegillConfig.mode = GillMode::Default;
+        thegillConfig.easing = kDefaultGillEasing;
+
+        thegillRuntime.targetLeftFront = 0.0f;
+        thegillRuntime.targetLeftRear = 0.0f;
+        thegillRuntime.targetRightFront = 0.0f;
+        thegillRuntime.targetRightRear = 0.0f;
+        thegillRuntime.actualLeftFront = 0.0f;
+        thegillRuntime.actualLeftRear = 0.0f;
+        thegillRuntime.actualRightFront = 0.0f;
+        thegillRuntime.actualRightRear = 0.0f;
+        thegillRuntime.easingRate = thegillCommand.easingRate;
+        thegillRuntime.brakeActive = false;
+        thegillRuntime.honkActive = false;
+
         Serial.println("[TheGillModule] Initialized");
     }
 
@@ -105,10 +144,40 @@ public:
         thegillCommand.rightFront = 0;
         thegillCommand.rightRear = 0;
         thegillCommand.flags = 0;
+        thegillRuntime.brakeActive = false;
+        thegillRuntime.honkActive = false;
     }
 
     void updateControl(const InputManager& inputs, float dt) override {
-        updateThegillControl();
+        (void)dt;
+        float left = applyDeadzone(inputs.getJoystickA_Y());
+        float right = applyDeadzone(inputs.getJoystickB_Y());
+
+        if (thegillConfig.mode == GillMode::Differential) {
+            const float throttle = applyDeadzone(inputs.getJoystickA_Y());
+            const float turn = applyDeadzone(inputs.getJoystickA_X());
+            left = constrain(throttle + turn, -1.0f, 1.0f);
+            right = constrain(throttle - turn, -1.0f, 1.0f);
+        }
+
+        writeMotorCommands(left, right);
+        thegillCommand.mode = thegillConfig.mode;
+        thegillCommand.easing = thegillConfig.easing;
+        thegillCommand.easingRate = thegillRuntime.easingRate;
+
+        const bool brake = inputs.getButton1();
+        const bool honk = inputs.getButton2();
+
+        thegillCommand.flags = 0;
+        if (brake) {
+            thegillCommand.flags |= GILL_FLAG_BRAKE;
+        }
+        if (honk) {
+            thegillCommand.flags |= GILL_FLAG_HONK;
+        }
+
+        thegillRuntime.brakeActive = brake;
+        thegillRuntime.honkActive = honk;
     }
 
     size_t prepareCommandPacket(size_t typeIndex, uint8_t* buffer, size_t bufferSize) override {
@@ -126,15 +195,49 @@ public:
     }
 
     void drawDashboard(DisplayCanvas& canvas) override {
-        drawThegillDashboard();
+        // Simple data-focused dashboard without header/logo
+        int16_t y = 14;
+
+        canvas.setFont(DisplayCanvas::NORMAL);
+        canvas.drawTextF(2, y, "Mode: %s", modeLabel(thegillConfig.mode));
+        y += 10;
+
+        canvas.setFont(DisplayCanvas::SMALL);
+        canvas.drawTextF(2, y, "Easing: %s", easingLabel(thegillConfig.easing));
+        y += 9;
+
+        canvas.drawTextF(2, y, "Motors (L/R):");
+        y += 9;
+        canvas.drawTextF(2, y, "  Front: %5d / %5d", thegillCommand.leftFront, thegillCommand.rightFront);
+        y += 9;
+        canvas.drawTextF(2, y, "  Rear:  %5d / %5d", thegillCommand.leftRear, thegillCommand.rightRear);
+        y += 10;
+
+        canvas.drawTextF(2, y, "IMU Data:");
+        y += 9;
+        canvas.drawTextF(2, y, "  Pitch: %6.1f  Roll: %6.1f",
+                         thegillTelemetryPacket.pitch,
+                         thegillTelemetryPacket.roll);
+        y += 9;
+        canvas.drawTextF(2, y, "  Yaw:   %6.1f", thegillTelemetryPacket.yaw);
+
+        // Status indicators at bottom
+        canvas.setFont(DisplayCanvas::TINY);
+        canvas.drawTextF(2, 62, "Age:%lums %s%s",
+                         static_cast<unsigned long>(thegillTelemetryPacket.commandAge),
+                         thegillRuntime.brakeActive ? "[BRK]" : "",
+                         thegillRuntime.honkActive ? "[HNK]" : "");
     }
 
     void buildModuleMenu(ModuleMenuBuilder& builder) override {
-        auto& modesMenu = builder.addSubmenu("thegill.modes", "Drive Modes", ICON_ROBOT);
-        addModeEntry(builder, modesMenu, GillMode::Default, "Default Mode");
-        addModeEntry(builder, modesMenu, GillMode::Differential, "Mech'Iane Mode");
+        builder.clear();
+        ModuleMenuItem& root = builder.root();
 
-        auto& easingMenu = builder.addSubmenu("thegill.easing", "Easing Curve", ICON_TUNING);
+        ModuleMenuItem& modeMenu = builder.addSubmenu("thegill.mode", "Drive Mode", ICON_ROBOT, &root);
+        addModeEntry(builder, modeMenu, GillMode::Default, "Tank Drive");
+        addModeEntry(builder, modeMenu, GillMode::Differential, "Differential");
+
+        ModuleMenuItem& easingMenu = builder.addSubmenu("thegill.easing", "Easing Curve", ICON_TUNING, &root);
         addEasingEntry(builder, easingMenu, GillEasing::None, "None");
         addEasingEntry(builder, easingMenu, GillEasing::Linear, "Linear");
         addEasingEntry(builder, easingMenu, GillEasing::EaseIn, "Ease In");
@@ -144,6 +247,52 @@ public:
     }
 
 private:
+    static constexpr float kDeadzone = 0.05f;
+
+    static float applyDeadzone(float value) {
+        return (fabsf(value) < kDeadzone) ? 0.0f : value;
+    }
+
+    static int16_t toMotor(float value) {
+        value = constrain(value, -1.0f, 1.0f);
+        return static_cast<int16_t>(roundf(value * 32767.0f));
+    }
+
+    void writeMotorCommands(float left, float right) {
+        const int16_t leftValue = toMotor(left);
+        const int16_t rightValue = toMotor(right);
+
+        thegillCommand.leftFront = leftValue;
+        thegillCommand.leftRear = leftValue;
+        thegillCommand.rightFront = rightValue;
+        thegillCommand.rightRear = rightValue;
+
+        thegillRuntime.targetLeftFront = left;
+        thegillRuntime.targetLeftRear = left;
+        thegillRuntime.targetRightFront = right;
+        thegillRuntime.targetRightRear = right;
+    }
+
+    const char* modeLabel(GillMode mode) const {
+        switch (mode) {
+            case GillMode::Default: return "Tank";
+            case GillMode::Differential: return "Differential";
+            default: return "Unknown";
+        }
+    }
+
+    const char* easingLabel(GillEasing easing) const {
+        switch (easing) {
+            case GillEasing::None: return "None";
+            case GillEasing::Linear: return "Linear";
+            case GillEasing::EaseIn: return "Ease In";
+            case GillEasing::EaseOut: return "Ease Out";
+            case GillEasing::EaseInOut: return "Ease In/Out";
+            case GillEasing::Sine: return "Sine";
+            default: return "Unknown";
+        }
+    }
+
     void addModeEntry(ModuleMenuBuilder& builder, ModuleMenuItem& parent, GillMode mode, const char* label) {
         builder.addAction(
             label,
@@ -185,6 +334,94 @@ private:
         thegillCommand.easing = easing;
         Serial.printf("[TheGillModule] Easing set to %d\n", static_cast<int>(easing));
     }
+
+    // ============================================================================
+    // Framework v2.0 Support - Button Events & Encoder Functions
+    // ============================================================================
+
+    void onActivate() override {
+        // Register encoder functions when module activates
+        FrameworkEngine& fw = FrameworkEngine::getInstance();
+
+        // F1: Toggle drive mode
+        EncoderFunction f1;
+        f1.label = "MODE";
+        f1.fullName = "Toggle Mode";
+        f1.callback = [this]() {
+            if (thegillConfig.mode == GillMode::Default) {
+                setMode(GillMode::Differential);
+            } else {
+                setMode(GillMode::Default);
+            }
+            AudioRegistry::play("menu_select");
+        };
+        f1.isToggle = false;
+        f1.toggleState = nullptr;
+        fw.setEncoderFunction(0, f1);
+
+        // F2: Cycle easing
+        EncoderFunction f2;
+        f2.label = "EASE";
+        f2.fullName = "Cycle Easing";
+        f2.callback = [this]() {
+            int currentEasing = static_cast<int>(thegillConfig.easing);
+            currentEasing = (currentEasing + 1) % 6; // 6 easing modes
+            setEasing(static_cast<GillEasing>(currentEasing));
+            AudioRegistry::play("menu_select");
+        };
+        f2.isToggle = false;
+        f2.toggleState = nullptr;
+        fw.setEncoderFunction(1, f2);
+
+        Serial.println("[TheGillModule] Activated with encoder functions");
+    }
+
+    void onDeactivate() override {
+        // Clear encoder functions when module deactivates
+        FrameworkEngine& fw = FrameworkEngine::getInstance();
+        fw.clearEncoderFunction(0);
+        fw.clearEncoderFunction(1);
+        Serial.println("[TheGillModule] Deactivated");
+    }
+
+    void onButtonEvent(size_t buttonIndex, int event) override {
+        ButtonEvent evt = static_cast<ButtonEvent>(event);
+
+        switch (buttonIndex) {
+            case 0: // Button 1 - Brake
+                if (evt == ButtonEvent::PRESSED) {
+                    thegillCommand.flags |= GILL_FLAG_BRAKE;
+                    thegillRuntime.brakeActive = true;
+                    AudioRegistry::play("menu_select");
+                } else if (evt == ButtonEvent::RELEASED) {
+                    thegillCommand.flags &= ~GILL_FLAG_BRAKE;
+                    thegillRuntime.brakeActive = false;
+                }
+                break;
+
+            case 1: // Button 2 - Honk
+                if (evt == ButtonEvent::PRESSED) {
+                    thegillCommand.flags |= GILL_FLAG_HONK;
+                    thegillRuntime.honkActive = true;
+                    AudioRegistry::play("paired");
+                } else if (evt == ButtonEvent::RELEASED) {
+                    thegillCommand.flags &= ~GILL_FLAG_HONK;
+                    thegillRuntime.honkActive = false;
+                }
+                break;
+
+            case 2: // Button 3 - Toggle Mode (long press)
+                if (evt == ButtonEvent::LONG_PRESS) {
+                    if (thegillConfig.mode == GillMode::Default) {
+                        setMode(GillMode::Differential);
+                    } else {
+                        setMode(GillMode::Default);
+                    }
+                    AudioRegistry::play("paired");
+                }
+                break;
+        }
+    }
 };
 
 // ============================================================================
@@ -208,8 +445,6 @@ static const uint8_t drongaze_logo_32x32[] = {
 
 // Forward declarations from drongaze.cpp
 extern void initDrongazeState();
-extern void updateDrongazeControl();
-extern void drawDrongazeDashboard();
 
 class DrongazeModule : public ILITEModule {
 public:
@@ -244,17 +479,65 @@ public:
 
     void onInit() override {
         initDrongazeState();
+        drongazeCommand.magic = DRONGAZE_PACKET_MAGIC;
+        drongazeCommand.throttle = 1000;
+        drongazeCommand.pitchAngle = 0;
+        drongazeCommand.rollAngle = 0;
+        drongazeCommand.yawAngle = 0;
+        drongazeCommand.arm_motors = false;
         Serial.println("[DrongazeModule] Initialized");
     }
 
-    void onPair() override { Serial.println("[DrongazeModule] Paired"); }
+    void onPair() override {
+        Serial.println("[DrongazeModule] Paired");
+        controlSessionActive = true;
+        const uint8_t* mac = ILITE.getDiscovery().getPairedMac();
+        if (mac != nullptr) {
+            memcpy(targetAddress, mac, sizeof(targetAddress));
+        }
+    }
+
     void onUnpair() override {
         Serial.println("[DrongazeModule] Unpaired");
         initDrongazeState();
+        controlSessionActive = false;
+        memset(targetAddress, 0, sizeof(targetAddress));
+        drongazeCommand.arm_motors = false;
     }
 
     void updateControl(const InputManager& inputs, float dt) override {
-        updateDrongazeControl();
+        (void)dt;
+
+        controlSessionActive = ILITE.isPaired();
+        if (controlSessionActive) {
+            const uint8_t* mac = ILITE.getDiscovery().getPairedMac();
+            if (mac != nullptr) {
+                memcpy(targetAddress, mac, sizeof(targetAddress));
+            }
+        } else {
+            memset(targetAddress, 0, sizeof(targetAddress));
+        }
+
+        const float throttleNorm = clampValue((inputs.getJoystickA_Y() + 1.0f) * 0.5f, 0.0f, 1.0f);
+        float throttle = 1000.0f + throttleNorm * 1000.0f;
+        const float trim = clampValue(inputs.getPotentiometer(), 0.0f, 1.0f) * 300.0f;
+        throttle = clampValue(throttle + trim, 1000.0f, 2000.0f);
+        drongazeCommand.throttle = static_cast<uint16_t>(throttle);
+        drongazeState.currentSpeed = static_cast<int8_t>((throttle - 1000.0f) / 10.0f);
+
+        const float yawInput = applyDeadzone(inputs.getJoystickA_X());
+        drongazeState.yawCommand = clampValue<int16_t>(
+            drongazeState.yawCommand + static_cast<int16_t>(yawInput * 12.0f), -180, 180);
+        drongazeCommand.yawAngle = static_cast<int8_t>(drongazeState.yawCommand);
+
+        const float rollInput = applyDeadzone(inputs.getJoystickB_X());
+        const float pitchInput = applyDeadzone(inputs.getJoystickB_Y());
+        const float axisScale = drongazeState.precisionMode ? 45.0f : 90.0f;
+
+        drongazeCommand.rollAngle = static_cast<int8_t>(
+            clampValue(rollInput * axisScale, -90.0f, 90.0f));
+        drongazeCommand.pitchAngle = static_cast<int8_t>(
+            clampValue(pitchInput * axisScale, -90.0f, 90.0f));
     }
 
     size_t prepareCommandPacket(size_t typeIndex, uint8_t* buffer, size_t bufferSize) override {
@@ -267,19 +550,171 @@ public:
 
     void handleTelemetry(size_t typeIndex, const uint8_t* data, size_t length) override {
         if (typeIndex == 0 && length >= sizeof(DrongazeTelemetry)) {
-            size_t copySize = length;
-            if (copySize > sizeof(drongazeTelemetry)) copySize = sizeof(drongazeTelemetry);
-            memcpy(&drongazeTelemetry, data, copySize);
+            memcpy(&drongazeTelemetry, data, sizeof(DrongazeTelemetry));
             drongazeState.stabilizationMask = drongazeTelemetry.stabilizationMask;
-            drongazeState.stabilizationGlobal = (drongazeTelemetry.stabilizationMask & DRONGAZE_STABILIZATION_GLOBAL_BIT) != 0;
+            drongazeState.stabilizationGlobal =
+                (drongazeTelemetry.stabilizationMask & DRONGAZE_STABILIZATION_GLOBAL_BIT) != 0;
         }
     }
 
     void drawDashboard(DisplayCanvas& canvas) override {
-        drawDrongazeDashboard();
+        // Simple data-focused dashboard without header/logo
+        int16_t y = 14;
+
+        canvas.setFont(DisplayCanvas::NORMAL);
+        canvas.drawTextF(2, y, "Throttle: %u (%.0f%%)",
+                         drongazeCommand.throttle,
+                         (drongazeCommand.throttle - 1000.0f) / 10.0f);
+        y += 10;
+
+        canvas.setFont(DisplayCanvas::SMALL);
+        canvas.drawTextF(2, y, "Command Angles:");
+        y += 9;
+        canvas.drawTextF(2, y, "  Pitch: %4d  Roll: %4d",
+                         drongazeCommand.pitchAngle,
+                         drongazeCommand.rollAngle);
+        y += 9;
+        canvas.drawTextF(2, y, "  Yaw:   %4d", drongazeCommand.yawAngle);
+        y += 10;
+
+        canvas.drawTextF(2, y, "Telemetry:");
+        y += 9;
+        canvas.drawTextF(2, y, "  P:%5.1f R:%5.1f Y:%5.1f",
+                         drongazeTelemetry.pitch,
+                         drongazeTelemetry.roll,
+                         drongazeTelemetry.yaw);
+        y += 9;
+        canvas.drawTextF(2, y, "  Stab:%s Mask:0x%02X",
+                         drongazeState.stabilizationGlobal ? "ON " : "OFF",
+                         drongazeTelemetry.stabilizationMask);
+
+        // Status indicators at bottom
+        canvas.setFont(DisplayCanvas::TINY);
+        canvas.drawTextF(2, 62, "Age:%lums [%s] Prec:%s",
+                         static_cast<unsigned long>(drongazeTelemetry.commandAge),
+                         drongazeCommand.arm_motors ? "ARMED" : "SAFE",
+                         drongazeState.precisionMode ? "ON" : "OFF");
+    }
+
+    void buildModuleMenu(ModuleMenuBuilder& builder) override {
+        builder.clear();
+        ModuleMenuItem& root = builder.root();
+
+        builder.addToggle(
+            "drongaze.arm",
+            "Arm Motors",
+            [this]() { toggleArm(); },
+            [this]() { return drongazeCommand.arm_motors; },
+            ICON_LOCK,
+            &root);
+
+        builder.addToggle(
+            "drongaze.precision",
+            "Precision Mode",
+            [this]() { togglePrecision(); },
+            [this]() { return drongazeState.precisionMode; },
+            ICON_JOYSTICK,
+            &root);
+
+        builder.addAction(
+            "drongaze.pid.refresh",
+            "Request PID Gains",
+            []() { requestDrongazePidGains(); },
+            ICON_TUNING,
+            &root);
+    }
+
+private:
+    static constexpr float kDeadzone = 0.05f;
+
+    static float applyDeadzone(float value) {
+        return (fabsf(value) < kDeadzone) ? 0.0f : value;
+    }
+
+    void toggleArm() {
+        drongazeCommand.arm_motors = !drongazeCommand.arm_motors;
+        Serial.printf("[DrongazeModule] Motors %s\n", drongazeCommand.arm_motors ? "armed" : "disarmed");
+    }
+
+    void togglePrecision() {
+        drongazeState.precisionMode = !drongazeState.precisionMode;
+        Serial.printf("[DrongazeModule] Precision mode %s\n",
+                      drongazeState.precisionMode ? "enabled" : "disabled");
+    }
+
+    // ============================================================================
+    // Framework v2.0 Support - Button Events & Encoder Functions
+    // ============================================================================
+
+    void onActivate() override {
+        // Register encoder functions when module activates
+        FrameworkEngine& fw = FrameworkEngine::getInstance();
+
+        // F1: ARM/DISARM (toggle)
+        EncoderFunction f1;
+        f1.label = "ARM";
+        f1.fullName = "Arm Motors";
+        f1.callback = [this]() {
+            toggleArm();
+        };
+        f1.isToggle = true;
+        f1.toggleState = &drongazeCommand.arm_motors;
+        fw.setEncoderFunction(0, f1);
+
+        // F2: Precision mode (toggle)
+        EncoderFunction f2;
+        f2.label = "PREC";
+        f2.fullName = "Precision Mode";
+        f2.callback = [this]() {
+            togglePrecision();
+            AudioRegistry::play("menu_select");
+        };
+        f2.isToggle = true;
+        f2.toggleState = &drongazeState.precisionMode;
+        fw.setEncoderFunction(1, f2);
+
+        Serial.println("[DrongazeModule] Activated with encoder functions");
+    }
+
+    void onDeactivate() override {
+        // Clear encoder functions when module deactivates
+        FrameworkEngine& fw = FrameworkEngine::getInstance();
+        fw.clearEncoderFunction(0);
+        fw.clearEncoderFunction(1);
+        Serial.println("[DrongazeModule] Deactivated");
+    }
+
+    void onButtonEvent(size_t buttonIndex, int event) override {
+        ButtonEvent evt = static_cast<ButtonEvent>(event);
+
+        switch (buttonIndex) {
+            case 0: // Button 1 - ARM/DISARM
+                if (evt == ButtonEvent::PRESSED) {
+                    toggleArm();
+                }
+                break;
+
+            case 1: // Button 2 - Precision Mode
+                if (evt == ButtonEvent::PRESSED) {
+                    togglePrecision();
+                    AudioRegistry::play("menu_select");
+                }
+                break;
+
+            case 2: // Button 3 - Emergency stop (long press)
+                if (evt == ButtonEvent::LONG_PRESS) {
+                    drongazeCommand.arm_motors = false;
+                    drongazeCommand.throttle = 1000;
+                    drongazeCommand.pitchAngle = 0;
+                    drongazeCommand.rollAngle = 0;
+                    drongazeCommand.yawAngle = 0;
+                    AudioRegistry::play("error");
+                    Serial.println("[DrongazeModule] EMERGENCY STOP!");
+                }
+                break;
+        }
     }
 };
-
 // ============================================================================
 // Bulky Module
 // ============================================================================
@@ -301,8 +736,6 @@ static const uint8_t bulky_logo_32x32[] = {
 
 // Forward declarations from bulky.cpp
 extern void initBulkyState();
-extern void updateBulkyControl();
-extern void drawBulkyDashboard();
 extern void handleBulkyTelemetry(const uint8_t* data, size_t length);
 
 class BulkyModule : public ILITEModule {
@@ -338,6 +771,7 @@ public:
 
     void onInit() override {
         initBulkyState();
+        bulkyCommand.replyIndex = 0;
         Serial.println("[BulkyModule] Initialized");
     }
 
@@ -353,7 +787,24 @@ public:
     }
 
     void updateControl(const InputManager& inputs, float dt) override {
-        updateBulkyControl();
+        (void)dt;
+        const float forward = applyDeadzone(inputs.getJoystickB_Y());
+        const float turn = applyDeadzone(inputs.getJoystickB_X());
+
+        bulkyState.motionState = computeMotionState(forward, turn);
+        bulkyState.targetSpeed = static_cast<int8_t>(clampValue(forward, -1.0f, 1.0f) * 100.0f);
+
+        int speedScale = static_cast<int>(clampValue(inputs.getPotentiometer(), 0.0f, 1.0f) * 100.0f);
+        if (bulkyState.slowModeActive) {
+            speedScale = std::min(speedScale, 40);
+        }
+
+        bulkyCommand.speed = static_cast<int8_t>((bulkyState.targetSpeed * speedScale) / 100);
+        bulkyCommand.motionState = bulkyState.motionState;
+        bulkyCommand.buttonStates[0] = bulkyState.honkActive ? 1 : 0;
+        bulkyCommand.buttonStates[1] = bulkyState.lightActive ? 1 : 0;
+        bulkyCommand.buttonStates[2] = bulkyState.slowModeActive ? 1 : 0;
+        bulkyCommand.replyIndex++;
     }
 
     size_t prepareCommandPacket(size_t typeIndex, uint8_t* buffer, size_t bufferSize) override {
@@ -371,13 +822,240 @@ public:
     }
 
     void drawDashboard(DisplayCanvas& canvas) override {
-        drawBulkyDashboard();
+        // Simple data-focused dashboard without header/logo
+        int16_t y = 14;
+
+        canvas.setFont(DisplayCanvas::NORMAL);
+        canvas.drawTextF(2, y, "Motion: %s", motionLabel(bulkyState.motionState));
+        y += 10;
+
+        canvas.setFont(DisplayCanvas::SMALL);
+        canvas.drawTextF(2, y, "Speed: Target %d%%", bulkyState.targetSpeed);
+        y += 9;
+        canvas.drawTextF(2, y, "       Actual %d%%", bulkyTelemetry.currentSpeed);
+        y += 10;
+
+        canvas.drawTextF(2, y, "Sensors:");
+        y += 9;
+        canvas.drawTextF(2, y, "  Front:  %3dcm", bulkyTelemetry.frontDistance);
+        y += 9;
+        canvas.drawTextF(2, y, "  Bottom: %3dcm", bulkyTelemetry.bottomDistance);
+        y += 9;
+        canvas.drawTextF(2, y, "  Line: 0x%02X  Fire: %3d",
+                         bulkyTelemetry.linePosition,
+                         bulkyTelemetry.firePose);
+
+        // Status indicators at bottom
+        canvas.setFont(DisplayCanvas::TINY);
+        canvas.drawTextF(2, 62, "%s%s%s",
+                         bulkyState.honkActive ? "[HONK]" : "",
+                         bulkyState.lightActive ? "[LITE]" : "",
+                         bulkyState.slowModeActive ? "[SLOW]" : "");
+    }
+
+    void buildModuleMenu(ModuleMenuBuilder& builder) override {
+        builder.clear();
+        ModuleMenuItem& root = builder.root();
+
+        builder.addToggle(
+            "bulky.honk",
+            "Toggle Horn",
+            [this]() { toggleHonk(); },
+            [this]() { return bulkyState.honkActive; },
+            ICON_PLAY,
+            &root);
+
+        builder.addToggle(
+            "bulky.light",
+            "Toggle Lights",
+            [this]() { toggleLight(); },
+            [this]() { return bulkyState.lightActive; },
+            ICON_INFO,
+            &root);
+
+        builder.addToggle(
+            "bulky.slow",
+            "Slow Mode",
+            [this]() { toggleSlowMode(); },
+            [this]() { return bulkyState.slowModeActive; },
+            ICON_WARNING,
+            &root);
+    }
+
+private:
+    static constexpr float kDeadzone = 0.05f;
+
+    static float applyDeadzone(float value) {
+        return (fabsf(value) < kDeadzone) ? 0.0f : value;
+    }
+
+    static uint8_t computeMotionState(float forward, float turn) {
+        const float absForward = fabsf(forward);
+        const float absTurn = fabsf(turn);
+
+        if (absForward < kDeadzone && absTurn < kDeadzone) {
+            return 0; // stop
+        }
+        if (absTurn > absForward) {
+            return turn > 0.0f ? 4 : 3; // turn right / left
+        }
+        return forward > 0.0f ? 1 : 2; // forward / backward
+    }
+
+    void toggleHonk() {
+        bulkyState.honkActive = !bulkyState.honkActive;
+        Serial.printf("[BulkyModule] Honk %s\n", bulkyState.honkActive ? "enabled" : "disabled");
+    }
+
+    void toggleLight() {
+        bulkyState.lightActive = !bulkyState.lightActive;
+        Serial.printf("[BulkyModule] Lights %s\n", bulkyState.lightActive ? "enabled" : "disabled");
+    }
+
+    void toggleSlowMode() {
+        bulkyState.slowModeActive = !bulkyState.slowModeActive;
+        Serial.printf("[BulkyModule] Slow mode %s\n", bulkyState.slowModeActive ? "enabled" : "disabled");
+    }
+
+    static const char* motionLabel(uint8_t state) {
+        switch (state) {
+            case 1: return "Forward";
+            case 2: return "Backward";
+            case 3: return "Turn Left";
+            case 4: return "Turn Right";
+            default: return "Stopped";
+        }
+    }
+
+    // ============================================================================
+    // Framework v2.0 Support - Button Events & Encoder Functions
+    // ============================================================================
+
+    void onActivate() override {
+        // Register encoder functions when module activates
+        FrameworkEngine& fw = FrameworkEngine::getInstance();
+
+        // F1: Toggle lights
+        EncoderFunction f1;
+        f1.label = "LITE";
+        f1.fullName = "Toggle Lights";
+        f1.callback = [this]() {
+            bulkyState.lightActive = !bulkyState.lightActive;
+            bulkyCommand.buttonStates[1] = bulkyState.lightActive ? 1 : 0;
+            AudioRegistry::play("menu_select");
+            Serial.printf("[BulkyModule] Lights %s\n", bulkyState.lightActive ? "ON" : "OFF");
+        };
+        f1.isToggle = true;
+        f1.toggleState = &bulkyState.lightActive;
+        fw.setEncoderFunction(0, f1);
+
+        // F2: Toggle slow mode
+        EncoderFunction f2;
+        f2.label = "SLOW";
+        f2.fullName = "Slow Mode";
+        f2.callback = [this]() {
+            bulkyState.slowModeActive = !bulkyState.slowModeActive;
+            bulkyCommand.buttonStates[2] = bulkyState.slowModeActive ? 1 : 0;
+            AudioRegistry::play("menu_select");
+            Serial.printf("[BulkyModule] Slow mode %s\n", bulkyState.slowModeActive ? "ON" : "OFF");
+        };
+        f2.isToggle = true;
+        f2.toggleState = &bulkyState.slowModeActive;
+        fw.setEncoderFunction(1, f2);
+
+        Serial.println("[BulkyModule] Activated with encoder functions");
+    }
+
+    void onDeactivate() override {
+        // Clear encoder functions when module deactivates
+        FrameworkEngine& fw = FrameworkEngine::getInstance();
+        fw.clearEncoderFunction(0);
+        fw.clearEncoderFunction(1);
+        Serial.println("[BulkyModule] Deactivated");
+    }
+
+    void onButtonEvent(size_t buttonIndex, int event) override {
+        ButtonEvent evt = static_cast<ButtonEvent>(event);
+
+        switch (buttonIndex) {
+            case 0: // Button 1 - Honk
+                if (evt == ButtonEvent::PRESSED) {
+                    bulkyState.honkActive = true;
+                    bulkyCommand.buttonStates[0] = 1;
+                    AudioRegistry::play("paired");
+                } else if (evt == ButtonEvent::RELEASED) {
+                    bulkyState.honkActive = false;
+                    bulkyCommand.buttonStates[0] = 0;
+                }
+                break;
+
+            case 1: // Button 2 - Toggle lights
+                if (evt == ButtonEvent::PRESSED) {
+                    bulkyState.lightActive = !bulkyState.lightActive;
+                    bulkyCommand.buttonStates[1] = bulkyState.lightActive ? 1 : 0;
+                    AudioRegistry::play("menu_select");
+                    Serial.printf("[BulkyModule] Lights %s\n", bulkyState.lightActive ? "ON" : "OFF");
+                }
+                break;
+
+            case 2: // Button 3 - Toggle slow mode
+                if (evt == ButtonEvent::PRESSED) {
+                    bulkyState.slowModeActive = !bulkyState.slowModeActive;
+                    bulkyCommand.buttonStates[2] = bulkyState.slowModeActive ? 1 : 0;
+                    AudioRegistry::play("menu_select");
+                    Serial.printf("[BulkyModule] Slow mode %s\n", bulkyState.slowModeActive ? "ON" : "OFF");
+                }
+                break;
+        }
     }
 };
-
 // ============================================================================
 // Explicit Registration (called before main)
 // ============================================================================
+
+
+static void registerModuleMenuEntries() {
+    auto& modules = ModuleRegistry::getModules();
+    if (modules.empty()) {
+        return;
+    }
+
+    const size_t existingSize = g_moduleMenuEntryIds.size();
+    g_moduleMenuEntryIds.reserve(existingSize + modules.size());
+
+    for (ILITEModule* module : modules) {
+        if (module == nullptr) {
+            continue;
+        }
+
+        std::string id = std::string("module.") + module->getModuleId();
+        if (std::find(g_moduleMenuEntryIds.begin(), g_moduleMenuEntryIds.end(), id) != g_moduleMenuEntryIds.end()) {
+            continue;
+        }
+
+        g_moduleMenuEntryIds.push_back(id);
+
+        const std::string& storedId = g_moduleMenuEntryIds.back();
+        MenuRegistry::registerEntry({
+            storedId.c_str(),
+            MENU_MODULES,
+            ICON_ROBOT,
+            module->getModuleName(),
+            nullptr,
+            [module]() {
+                FrameworkEngine::getInstance().loadModule(module);
+            },
+            nullptr,
+            nullptr,
+            static_cast<int>(g_moduleMenuEntryIds.size()),
+            false,
+            false,
+            nullptr,
+            false,
+            nullptr
+        });
+    }
+}
 
 // ============================================================================
 // Built-in Module Registration Function
@@ -391,14 +1069,24 @@ public:
  * with static initialization in library archives.
  */
 void registerBuiltInModules() {
+    static bool registered = false;
     static TheGillModule theGillModule;
     static DrongazeModule drongazeModule;
     static BulkyModule bulkyModule;
+
+    if (registered) {
+        return;
+    }
 
     ModuleRegistry::registerModule(&theGillModule);
     ModuleRegistry::registerModule(&drongazeModule);
     ModuleRegistry::registerModule(&bulkyModule);
 
+    registerModuleMenuEntries();
+    registered = true;
     Serial.println("[ILITE] Built-in modules registered: TheGill, DroneGaze, Bulky");
 }
+
+
+
 

@@ -16,6 +16,7 @@ constexpr uint8_t button1 = 23;
 constexpr uint8_t button2 = 25;
 constexpr uint8_t button3 = 27;
 constexpr uint8_t potA = 32;
+constexpr uint8_t batteryPin = 33;  // ADC1_CH5 for battery voltage (divided by 2)
 
 constexpr unsigned long deadtime = 50; // ms
 

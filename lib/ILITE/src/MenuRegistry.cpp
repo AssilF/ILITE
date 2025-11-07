@@ -4,6 +4,7 @@
  */
 
 #include "MenuRegistry.h"
+#include "FrameworkEngine.h"
 #include <cstring>
 #include <algorithm>
 
@@ -139,11 +140,14 @@ void MenuRegistry::initBuiltInMenus() {
         ICON_HOME,
         "Home",
         nullptr,
-        nullptr,  // No callback - opens submenu
+        []() {
+            // Close menu to show dashboard
+            FrameworkEngine::getInstance().closeMenu();
+        },
         nullptr,
         nullptr,
         0,
-        true,  // Is submenu
+        false,  // Not a submenu - directly shows dashboard
         false,
         nullptr,
         false,

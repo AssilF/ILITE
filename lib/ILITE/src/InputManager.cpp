@@ -62,6 +62,7 @@ void InputManager::begin() {
     pinMode(joystickB_X, INPUT);
     pinMode(joystickB_Y, INPUT);
     pinMode(potA, INPUT);
+    pinMode(batteryPin, INPUT);
 
     // Attach encoder interrupt (same as original input.cpp)
     attachInterrupt(encoderA, []() {
@@ -150,6 +151,68 @@ uint16_t InputManager::getJoystickB_Y_Raw() const {
 
 uint16_t InputManager::getPotentiometer_Raw() const {
     return analogRead(potA);
+}
+
+// ============================================================================
+// Battery Reading
+// ============================================================================
+
+uint16_t InputManager::getBatteryRaw() const {
+    return analogRead(batteryPin);
+}
+
+float InputManager::getBatteryVoltage() const {
+    // Read ADC value (0-4095 for 12-bit ADC)
+    uint16_t adcValue = analogRead(batteryPin);
+
+    // Convert to voltage (ESP32 ADC reference is 3.3V for 4095)
+    float voltage = (adcValue / 4095.0f) * 3.3f;
+
+    // Multiply by 2 due to voltage divider with 2 equal resistors
+    voltage *= 2.0f;
+
+    return voltage;
+}
+
+uint8_t InputManager::getBatteryPercent() const {
+    float voltage = getBatteryVoltage();
+
+    // Li-Po voltage curve (1S cell)
+    // 4.2V = 100%, 3.0V = 0%
+    const float voltageMax = 4.2f;
+    const float voltageMin = 3.0f;
+
+    // Clamp voltage to valid range
+    if (voltage >= voltageMax) {
+        return 100;
+    }
+    if (voltage <= voltageMin) {
+        return 0;
+    }
+
+    // Use non-linear Li-Po discharge curve for better accuracy
+    // Voltage points: 4.2, 4.0, 3.85, 3.7, 3.5, 3.3, 3.0
+    // Percent points: 100,  90,   75,  50,  25,  10,   0
+
+    if (voltage >= 4.0f) {
+        // 100% to 90%: 4.2V to 4.0V
+        return 90 + (uint8_t)((voltage - 4.0f) / 0.2f * 10.0f);
+    } else if (voltage >= 3.85f) {
+        // 90% to 75%: 4.0V to 3.85V
+        return 75 + (uint8_t)((voltage - 3.85f) / 0.15f * 15.0f);
+    } else if (voltage >= 3.7f) {
+        // 75% to 50%: 3.85V to 3.7V
+        return 50 + (uint8_t)((voltage - 3.7f) / 0.15f * 25.0f);
+    } else if (voltage >= 3.5f) {
+        // 50% to 25%: 3.7V to 3.5V
+        return 25 + (uint8_t)((voltage - 3.5f) / 0.2f * 25.0f);
+    } else if (voltage >= 3.3f) {
+        // 25% to 10%: 3.5V to 3.3V
+        return 10 + (uint8_t)((voltage - 3.3f) / 0.2f * 15.0f);
+    } else {
+        // 10% to 0%: 3.3V to 3.0V
+        return (uint8_t)((voltage - 3.0f) / 0.3f * 10.0f);
+    }
 }
 
 // ============================================================================

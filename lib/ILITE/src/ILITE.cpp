@@ -19,6 +19,7 @@
 #include "ScreenRegistry.h"
 #include "ControlBindingSystem.h"
 #include "FrameworkEngine.h"
+#include "connection_log.h"
 
 // ============================================================================
 // Global Instances
@@ -86,6 +87,12 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
     }
     Serial.println("  ✓ Hardware initialized");
 
+    // Initialize connection log
+    connectionLogInit();
+    connectionLogSetRecordingEnabled(true);
+    connectionLogAdd("[ILITE] Framework starting...");
+    connectionLogAdd("[ILITE] Hardware initialized");
+
     // Step 2: Initialize packet router
     Serial.println("\n[2/7] Initializing packet router...");
     if (!PacketRouter::getInstance().begin()) {
@@ -94,8 +101,9 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
     }
     Serial.println("  ✓ Packet router initialized");
 
-    // Step 3: Initialize modules
+    // Step 3: Register and initialize modules
     Serial.println("\n[3/7] Initializing modules...");
+    registerBuiltInModules();
     if (!initModules()) {
         Serial.println("ERROR: Module initialization failed!");
         return false;
@@ -613,6 +621,10 @@ uint32_t ILITEFramework::getUptimeMs() const {
 
 const ILITEConfig& ILITEFramework::getConfig() const {
     return config_;
+}
+
+EspNowDiscovery& ILITEFramework::getDiscovery() {
+    return *discovery_;
 }
 
 bool ILITEFramework::isInitialized() const {
