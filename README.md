@@ -302,9 +302,9 @@ Contributions are welcome! Please follow these guidelines:
 
 ## 🐛 Known Issues
 
-- OTA updates require WiFi credentials in `main.cpp`
-- Display refresh rate limited to ~10Hz due to U8G2 library
-- ESP-NOW range limited to ~200m line-of-sight
+- random pair reset due to false positive timeout stack.
+- backwards compatibility with dronegaze.
+- Sometimes the menu breaks.
 
 ---
 
@@ -312,11 +312,7 @@ Contributions are welcome! Please follow these guidelines:
 
 - [ ] Web-based configuration interface
 - [ ] Multiple robot support (fleet control)
-- [ ] Data logging to SD card
 - [ ] Bluetooth Classic/BLE support
-- [ ] IMU integration for tilt compensation
-- [ ] Battery voltage monitoring
-- [ ] Touch screen support
 
 ---
 
