@@ -4,7 +4,7 @@
 [![ESP32](https://img.shields.io/badge/ESP32-Compatible-green.svg)](https://www.espressif.com/en/products/socs/esp32)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**ILITE** (Integrated Lightweight Interactive Telemetry Environment) is a powerful, extensible ESP32-based robotics controller framework for ASCE competition robots and custom projects.
+**ILITE** is a powerful, extensible ESP32-based robotics controller framework for ASCE competition robots and custom projects.
 
 Transformed from a hardcoded controller into a modular framework, ILITE enables rapid development of wireless robotics controllers with hot-swappable modules, modern OLED UI, and ESP-NOW communication.
 
