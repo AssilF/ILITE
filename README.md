@@ -4,6 +4,8 @@
 [![ESP32](https://img.shields.io/badge/ESP32-Compatible-green.svg)](https://www.espressif.com/en/products/socs/esp32)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+note that this is still work in progress and is moving fast, in parallel, there's some AI generated garbage that I am still cleaning up (until next push!)
+
 **ILITE** is a powerful, extensible ESP32-based robotics controller framework for ASCE competition robots and custom projects.
 
 Transformed from a hardcoded controller into a modular framework, ILITE enables rapid development of wireless robotics controllers with hot-swappable modules, modern OLED UI, and ESP-NOW communication.
