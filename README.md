@@ -4,7 +4,9 @@
 [![ESP32](https://img.shields.io/badge/ESP32-Compatible-green.svg)](https://www.espressif.com/en/products/socs/esp32)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**ILITE** (Integrated Lightweight Interactive Telemetry Environment) is a powerful, extensible ESP32-based robotics controller framework for ASCE competition robots and custom projects.
+note that this is still work in progress and is moving fast, in parallel, there's some AI generated garbage that I am still cleaning up (until next push!)
+
+**ILITE** is a powerful, extensible ESP32-based robotics controller framework for ASCE competition robots and custom projects.
 
 Transformed from a hardcoded controller into a modular framework, ILITE enables rapid development of wireless robotics controllers with hot-swappable modules, modern OLED UI, and ESP-NOW communication.
 
@@ -300,9 +302,9 @@ Contributions are welcome! Please follow these guidelines:
 
 ## 🐛 Known Issues
 
-- OTA updates require WiFi credentials in `main.cpp`
-- Display refresh rate limited to ~10Hz due to U8G2 library
-- ESP-NOW range limited to ~200m line-of-sight
+- random pair reset due to false positive timeout stack.
+- backwards compatibility with dronegaze.
+- Sometimes the menu breaks.
 
 ---
 
@@ -310,11 +312,7 @@ Contributions are welcome! Please follow these guidelines:
 
 - [ ] Web-based configuration interface
 - [ ] Multiple robot support (fleet control)
-- [ ] Data logging to SD card
 - [ ] Bluetooth Classic/BLE support
-- [ ] IMU integration for tilt compensation
-- [ ] Battery voltage monitoring
-- [ ] Touch screen support
 
 ---
 
