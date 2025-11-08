@@ -15,6 +15,7 @@
 #include "IconLibrary.h"
 #include "InputManager.h"
 #include "input.h"
+#include <WiFi.h>
 #include <algorithm>
 #include <cstring>
 
@@ -36,6 +37,7 @@ FrameworkEngine::FrameworkEngine()
     , currentModule_(nullptr)
     , isPaired_(false)
     , status_(FrameworkStatus::IDLE)
+    , moduleMenuBuilder_(moduleMenuRoot_)
     , selectedStripButton_(StripButton::MENU)
     , stripButtonCount_(1) // Always have MENU button
     , menuOpen_(false)
@@ -96,6 +98,139 @@ void FrameworkEngine::registerDefaultMenuEntries() {
     devices.isReadOnly = false;
     devices.customDraw = nullptr;
     MenuRegistry::registerEntry(devices);
+
+    // Status submenu
+    MenuEntry status;
+    status.id = "framework.status";
+    status.parent = MENU_ROOT;
+    status.icon = ICON_INFO;
+    status.label = "System Status";
+    status.shortLabel = "Status";
+    status.onSelect = nullptr;
+    status.condition = nullptr;
+    status.getValue = nullptr;
+    status.priority = 15;
+    status.isSubmenu = true;
+    status.isToggle = false;
+    status.getToggleState = nullptr;
+    status.isReadOnly = false;
+    status.customDraw = nullptr;
+    MenuRegistry::registerEntry(status);
+
+    // Heap info
+    MenuEntry heap;
+    heap.id = "framework.status.heap";
+    heap.parent = "framework.status";
+    heap.icon = ICON_INFO;
+    heap.label = "Free Heap";
+    heap.shortLabel = nullptr;
+    heap.onSelect = nullptr;
+    heap.condition = nullptr;
+    heap.getValue = []() {
+        static char heapStr[32];
+        uint32_t freeHeap = ESP.getFreeHeap();
+        uint32_t totalHeap = ESP.getHeapSize();
+        snprintf(heapStr, sizeof(heapStr), "%lu/%lu KB", freeHeap/1024, totalHeap/1024);
+        return heapStr;
+    };
+    heap.priority = 0;
+    heap.isSubmenu = false;
+    heap.isToggle = false;
+    heap.getToggleState = nullptr;
+    heap.isReadOnly = true;
+    heap.customDraw = nullptr;
+    MenuRegistry::registerEntry(heap);
+
+    // Uptime
+    MenuEntry uptime;
+    uptime.id = "framework.status.uptime";
+    uptime.parent = "framework.status";
+    uptime.icon = ICON_INFO;
+    uptime.label = "Uptime";
+    uptime.shortLabel = nullptr;
+    uptime.onSelect = nullptr;
+    uptime.condition = nullptr;
+    uptime.getValue = []() {
+        static char uptimeStr[32];
+        uint32_t seconds = millis() / 1000;
+        uint32_t hours = seconds / 3600;
+        uint32_t mins = (seconds % 3600) / 60;
+        uint32_t secs = seconds % 60;
+        snprintf(uptimeStr, sizeof(uptimeStr), "%02luh:%02lum:%02lus", hours, mins, secs);
+        return uptimeStr;
+    };
+    uptime.priority = 1;
+    uptime.isSubmenu = false;
+    uptime.isToggle = false;
+    uptime.getToggleState = nullptr;
+    uptime.isReadOnly = true;
+    uptime.customDraw = nullptr;
+    MenuRegistry::registerEntry(uptime);
+
+    // Battery
+    MenuEntry battery;
+    battery.id = "framework.status.battery";
+    battery.parent = "framework.status";
+    battery.icon = ICON_BATTERY_FULL; // ICON_BATTERY was undefined; use ICON_INFO or set to nullptr if no icon desired
+    battery.label = "Battery";
+    battery.shortLabel = nullptr;
+    battery.onSelect = nullptr;
+    battery.condition = nullptr;
+    battery.getValue = []() {
+        static char battStr[32];
+        const InputManager& inputs = InputManager::getInstance();
+        float voltage = inputs.getBatteryVoltage();
+        uint8_t percent = inputs.getBatteryPercent();
+        snprintf(battStr, sizeof(battStr), "%.2fV (%d%%)", voltage, percent);
+        return battStr;
+    };
+    battery.priority = 2;
+    battery.isSubmenu = false;
+    battery.isToggle = false;
+    battery.getToggleState = nullptr;
+    battery.isReadOnly = true;
+    battery.customDraw = nullptr;
+    MenuRegistry::registerEntry(battery);
+
+    // WiFi Status
+    MenuEntry wifi;
+    wifi.id = "framework.status.wifi";
+    wifi.parent = "framework.status";
+    wifi.icon = ICON_SIGNAL_MED;
+    wifi.label = "WiFi Status";
+    wifi.shortLabel = nullptr;
+    wifi.onSelect = nullptr;
+    wifi.condition = nullptr;
+    wifi.getValue = []() {
+        return WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected";
+    };
+    wifi.priority = 3;
+    wifi.isSubmenu = false;
+    wifi.isToggle = false;
+    wifi.getToggleState = nullptr;
+    wifi.isReadOnly = true;
+    wifi.customDraw = nullptr;
+    MenuRegistry::registerEntry(wifi);
+
+    // ESP-NOW Status
+    MenuEntry espnow;
+    espnow.id = "framework.status.espnow";
+    espnow.parent = "framework.status";
+    espnow.icon = ICON_SIGNAL_FULL;
+    espnow.label = "ESP-NOW";
+    espnow.shortLabel = nullptr;
+    espnow.onSelect = nullptr;
+    espnow.condition = nullptr;
+    espnow.getValue = [this]() {
+        return isPaired_ ? "Paired" : "Not Paired";
+    };
+    espnow.priority = 4;
+    espnow.isSubmenu = false;
+    espnow.isToggle = false;
+    espnow.getToggleState = nullptr;
+    espnow.isReadOnly = true;
+    espnow.customDraw = nullptr;
+    MenuRegistry::registerEntry(espnow);
 
     Serial.println("[FrameworkEngine] Default menu entries registered");
 }
@@ -190,27 +325,16 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
     // Track left boundary for right-side content
     uint8_t leftBoundary = 2;
 
-    // Left side: Show page title if menu/screens open, otherwise show strip buttons
-    if (menuOpen_) {
-        // Show "MENU" title
-        canvas.setFont(DisplayCanvas::NORMAL);
-        canvas.drawText(2, stripY + 8, "MENU");
-        leftBoundary = 45;  // Title takes ~40-45 pixels
-    } else if (DefaultActions::hasActiveScreen()) {
-        // Show screen title
-        canvas.setFont(DisplayCanvas::NORMAL);
-        const char* title = DefaultActions::getActiveScreenTitle();
-        if (title) {
-            canvas.drawText(2, stripY + 8, title);
-            leftBoundary = 2 + strlen(title) * 6;  // Approximate width
-        }
-    } else {
-        // Normal mode: Show strip buttons (Menu, F1, F2)
+    // Left side: Show strip buttons based on context
+    // Only show encoder functions (F1, F2) when in module dashboard
+    bool inModuleDashboard = currentModule_ && !menuOpen_ && !DefaultActions::hasActiveScreen();
+
+    {
         uint8_t buttonX = 2;
         const uint8_t buttonSpacing = 4;
         const uint8_t buttonWidth = 18;
 
-        // Menu button (always first)
+        // Menu button (always visible)
         bool menuSelected = (selectedStripButton_ == StripButton::MENU);
         if (menuSelected) {
             canvas.drawRect(buttonX - 1, stripY + 1, buttonWidth, 7,1); // Highlight
@@ -222,8 +346,8 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
         }
         buttonX += buttonWidth + buttonSpacing;
 
-        // F1 button (if defined)
-        if (hasEncoderFunction_[0]) {
+        // F1 button (only show in module dashboard if function is defined)
+        if (inModuleDashboard && hasEncoderFunction_[0]) {
             bool f1Selected = (selectedStripButton_ == StripButton::FUNCTION_1);
             if (f1Selected) {
                 canvas.drawRect(buttonX - 1, stripY + 1, buttonWidth, 7,1);
@@ -245,8 +369,8 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             buttonX += buttonWidth + buttonSpacing;
         }
 
-        // F2 button (if defined)
-        if (hasEncoderFunction_[1]) {
+        // F2 button (only show in module dashboard if function is defined)
+        if (inModuleDashboard && hasEncoderFunction_[1]) {
             bool f2Selected = (selectedStripButton_ == StripButton::FUNCTION_2);
             if (f2Selected) {
                 canvas.drawRect(buttonX - 1, stripY + 1, buttonWidth, 7,1);
@@ -265,9 +389,24 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             if (f2Selected) {
                 canvas.setDrawColor(1);
             }
+            buttonX += buttonSpacing;
         }
 
         leftBoundary = buttonX;
+    }
+
+    // Show context label when menu/screen is open
+    if (menuOpen_) {
+        canvas.setFont(DisplayCanvas::SMALL);
+        canvas.drawText(leftBoundary + 4, stripY + 8, "MENU");
+        leftBoundary += 30;
+    } else if (DefaultActions::hasActiveScreen()) {
+        canvas.setFont(DisplayCanvas::SMALL);
+        const char* title = DefaultActions::getActiveScreenTitle();
+        if (title) {
+            canvas.drawText(leftBoundary + 4, stripY + 8, title);
+            leftBoundary += strlen(title) * 5 + 8;
+        }
     }
 
     // Right side: Module name, battery, status
@@ -581,17 +720,22 @@ void FrameworkEngine::loadModule(ILITEModule* module) {
         currentModule_->onDeactivate();
     }
 
+    // Clear module menu entries from previous module
+    clearModuleMenuEntries();
+
     // Load new module
     currentModule_ = module;
 
-    // Activate new module
+    // Clear encoder functions before activating new module
+    clearEncoderFunction(0);
+    clearEncoderFunction(1);
+
+    // Activate new module (it will register its own encoder functions)
     if (currentModule_) {
         currentModule_->onActivate();
 
-        // TODO: Load encoder functions from module
-        // For now, clear them (modules will set them explicitly)
-        clearEncoderFunction(0);
-        clearEncoderFunction(1);
+        // Build and register module menu entries
+        registerModuleMenuEntries();
     }
 
     updateStripButtons();
@@ -846,5 +990,107 @@ void FrameworkEngine::toggleMenu() {
         closeMenu();
     } else {
         openMenu();
+    }
+}
+
+// ============================================================================
+// Module Menu Integration
+// ============================================================================
+
+void FrameworkEngine::registerModuleMenuEntries() {
+    if (!currentModule_) {
+        return;
+    }
+
+    // Clear and rebuild module menu
+    moduleMenuBuilder_.clear();
+    moduleMenuRoot_.children.clear();
+    currentModule_->buildModuleMenu(moduleMenuBuilder_);
+
+    // Convert and register all module menu items
+    convertModuleMenuItems(moduleMenuRoot_, MENU_ROOT);
+
+    Serial.printf("[FrameworkEngine] Registered %d module menu entries\n",
+                  moduleMenuIds_.size());
+}
+
+void FrameworkEngine::clearModuleMenuEntries() {
+    // Unregister all module menu entries from MenuRegistry
+    for (const std::string& id : moduleMenuIds_) {
+        // MenuRegistry doesn't have a remove method, so we'll just clear our tracking
+        // The entries will remain but won't be active when module is unloaded
+        Serial.printf("[FrameworkEngine] Clearing module menu entry: %s\n", id.c_str());
+    }
+    moduleMenuIds_.clear();
+    moduleMenuBuilder_.clear();
+    moduleMenuRoot_.children.clear();
+}
+
+void FrameworkEngine::convertModuleMenuItems(const ModuleMenuItem& parent, MenuID parentMenuId) {
+    // Recursively convert ModuleMenuItem tree to MenuEntry and register
+    for (const ModuleMenuItem& item : parent.children) {
+        // Create MenuEntry from ModuleMenuItem
+        MenuEntry entry;
+
+        // Allocate persistent strings for ID and label
+        std::string* persistentId = new std::string(item.id);
+        std::string* persistentLabel = new std::string(item.label);
+
+        entry.id = persistentId->c_str();
+        entry.parent = parentMenuId;
+        entry.icon = item.icon;
+        entry.label = persistentLabel->c_str();
+        entry.shortLabel = nullptr;
+        entry.priority = item.priority;
+        entry.isReadOnly = false;
+
+        // Track this ID for cleanup
+        moduleMenuIds_.push_back(item.id);
+
+        // Convert item type
+        switch (item.type) {
+            case ModuleMenuItem::Type::Action:
+                entry.isSubmenu = false;
+                entry.isToggle = false;
+                entry.onSelect = item.onSelect;
+                entry.getValue = item.value;
+                break;
+
+            case ModuleMenuItem::Type::Toggle:
+                entry.isSubmenu = false;
+                entry.isToggle = true;
+                entry.onSelect = item.onSelect;
+                entry.getToggleState = item.toggleState;
+                entry.getValue = item.value;
+                break;
+
+            case ModuleMenuItem::Type::Submenu:
+                entry.isSubmenu = true;
+                entry.isToggle = false;
+                entry.onSelect = nullptr;
+                break;
+
+            case ModuleMenuItem::Type::Screen:
+                entry.isSubmenu = false;
+                entry.isToggle = false;
+                entry.onSelect = item.onSelect;
+                entry.getValue = item.value;
+                break;
+        }
+
+        // Set visibility condition
+        entry.condition = item.condition;
+        entry.customDraw = nullptr;
+
+        // Register with MenuRegistry
+        MenuRegistry::registerEntry(entry);
+
+        Serial.printf("[FrameworkEngine] Registered menu entry: %s (parent: %s)\n",
+                      entry.id, parentMenuId ? parentMenuId : "ROOT");
+
+        // Recursively process children if this is a submenu
+        if (item.type == ModuleMenuItem::Type::Submenu && !item.children.empty()) {
+            convertModuleMenuItems(item, entry.id);
+        }
     }
 }

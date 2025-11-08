@@ -47,6 +47,7 @@ bool controlSessionActive = false;
 uint8_t targetAddress[6] = {0};
 
 // Include platform module headers
+#include <ControlBindingSystem.h>
 #include <thegill.h>
 #include <drongaze.h>
 #include <bulky.h>
@@ -86,11 +87,15 @@ public:
     size_t getDetectionKeywordCount() const override { return 3; }
     const uint8_t* getLogo32x32() const override { return thegill_logo_32x32; }
 
-    size_t getCommandPacketTypeCount() const override { return 1; }
+    size_t getCommandPacketTypeCount() const override { return 2; }
     PacketDescriptor getCommandPacketDescriptor(size_t index) const override {
         if (index == 0) {
             return {"TheGill Command", THEGILL_PACKET_MAGIC, sizeof(ThegillCommand),
                     sizeof(ThegillCommand), true, nullptr, 0};
+        }
+        if (index == 1) {
+            return {"Arm Command", ARM_COMMAND_MAGIC, sizeof(ArmControlCommand),
+                    sizeof(ArmControlCommand), true, nullptr, 0};
         }
         return {};
     }
@@ -149,41 +154,23 @@ public:
     }
 
     void updateControl(const InputManager& inputs, float dt) override {
+        (void)inputs;
         (void)dt;
-        float left = applyDeadzone(inputs.getJoystickA_Y());
-        float right = applyDeadzone(inputs.getJoystickB_Y());
-
-        if (thegillConfig.mode == GillMode::Differential) {
-            const float throttle = applyDeadzone(inputs.getJoystickA_Y());
-            const float turn = applyDeadzone(inputs.getJoystickA_X());
-            left = constrain(throttle + turn, -1.0f, 1.0f);
-            right = constrain(throttle - turn, -1.0f, 1.0f);
-        }
-
-        writeMotorCommands(left, right);
-        thegillCommand.mode = thegillConfig.mode;
-        thegillCommand.easing = thegillConfig.easing;
-        thegillCommand.easingRate = thegillRuntime.easingRate;
-
-        const bool brake = inputs.getButton1();
-        const bool honk = inputs.getButton2();
-
-        thegillCommand.flags = 0;
-        if (brake) {
-            thegillCommand.flags |= GILL_FLAG_BRAKE;
-        }
-        if (honk) {
-            thegillCommand.flags |= GILL_FLAG_HONK;
-        }
-
-        thegillRuntime.brakeActive = brake;
-        thegillRuntime.honkActive = honk;
+        // Call the centralized control update function from thegill.cpp
+        updateThegillControl();
     }
 
     size_t prepareCommandPacket(size_t typeIndex, uint8_t* buffer, size_t bufferSize) override {
         if (typeIndex == 0 && bufferSize >= sizeof(ThegillCommand)) {
             memcpy(buffer, &thegillCommand, sizeof(ThegillCommand));
             return sizeof(ThegillCommand);
+        }
+        if (typeIndex == 1 && bufferSize >= sizeof(ArmControlCommand)) {
+            // Only send arm command when in arm mode
+            if (mechIaneMode != MechIaneMode::DriveMode) {
+                memcpy(buffer, &armCommand, sizeof(ArmControlCommand));
+                return sizeof(ArmControlCommand);
+            }
         }
         return 0;
     }
@@ -195,38 +182,60 @@ public:
     }
 
     void drawDashboard(DisplayCanvas& canvas) override {
-        // Simple data-focused dashboard without header/logo
-        int16_t y = 14;
+        const int16_t top = 14;  // Below top strip
 
-        canvas.setFont(DisplayCanvas::NORMAL);
-        canvas.drawTextF(2, y, "Mode: %s", modeLabel(thegillConfig.mode));
-        y += 10;
+        // Check if we're in arm control mode
+        if (mechIaneMode != MechIaneMode::DriveMode) {
+            // Draw 3D arm visualization
+            extern IKEngine::IKSolution lastArmSolution;
+            extern void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& solution);
 
-        canvas.setFont(DisplayCanvas::SMALL);
-        canvas.drawTextF(2, y, "Easing: %s", easingLabel(thegillConfig.easing));
-        y += 9;
+            // Solve IK to get current solution
+            extern IKEngine::Vec3 targetPosition;
+            extern IKEngine::Vec3 targetOrientation;
+            extern IKEngine::InverseKinematics ikSolver;
+            IKEngine::IKSolution solution;
+            ikSolver.solve(targetPosition, targetOrientation, solution);
 
-        canvas.drawTextF(2, y, "Motors (L/R):");
-        y += 9;
-        canvas.drawTextF(2, y, "  Front: %5d / %5d", thegillCommand.leftFront, thegillCommand.rightFront);
-        y += 9;
-        canvas.drawTextF(2, y, "  Rear:  %5d / %5d", thegillCommand.leftRear, thegillCommand.rightRear);
-        y += 10;
+            draw3DArmVisualization(canvas, solution);
 
-        canvas.drawTextF(2, y, "IMU Data:");
-        y += 9;
-        canvas.drawTextF(2, y, "  Pitch: %6.1f  Roll: %6.1f",
-                         thegillTelemetryPacket.pitch,
-                         thegillTelemetryPacket.roll);
-        y += 9;
-        canvas.drawTextF(2, y, "  Yaw:   %6.1f", thegillTelemetryPacket.yaw);
+            // Draw mode header
+            canvas.setFont(DisplayCanvas::SMALL);
+            const char* modeText = (mechIaneMode == MechIaneMode::ArmXYZ) ? "ARM: XYZ" : "ARM: ORI";
+            canvas.drawText(0, top, modeText);
+        } else {
+            // Normal drive mode dashboard
+            canvas.setFont(DisplayCanvas::SMALL);
 
-        // Status indicators at bottom
-        canvas.setFont(DisplayCanvas::TINY);
-        canvas.drawTextF(2, 62, "Age:%lums %s%s",
-                         static_cast<unsigned long>(thegillTelemetryPacket.commandAge),
-                         thegillRuntime.brakeActive ? "[BRK]" : "",
-                         thegillRuntime.honkActive ? "[HNK]" : "");
+            // Top info line: Mode, Easing, Rate
+            canvas.drawTextF(0, top, "Mode: %s", modeLabel(thegillConfig.mode));
+            canvas.drawTextF(0, top + 8, "Ease: %s", easingLabel(thegillConfig.easing));
+            canvas.drawTextF(0, top + 16, "Rate: %.1f", thegillRuntime.easingRate);
+
+            // Convert command values (int16_t -32767 to 32767) to float (-1.0 to 1.0)
+            float leftFrontCmd = thegillCommand.leftFront / 32767.0f;
+            float leftRearCmd = thegillCommand.leftRear / 32767.0f;
+            float rightFrontCmd = thegillCommand.rightFront / 32767.0f;
+            float rightRearCmd = thegillCommand.rightRear / 32767.0f;
+
+            float leftAvg = (leftFrontCmd + leftRearCmd) * 0.5f;
+            float rightAvg = (rightFrontCmd + rightRearCmd) * 0.5f;
+
+            // Left motor bar
+            canvas.drawText(0, top + 26, "Left");
+            drawMotorBar(canvas, 40, top + 20, leftAvg, leftAvg);
+            drawMotorBarLabels(canvas, 40, top + 20, "LF", leftFrontCmd, "LR", leftRearCmd);
+
+            // Right motor bar
+            canvas.drawText(0, top + 40, "Right");
+            drawMotorBar(canvas, 40, top + 34, rightAvg, rightAvg);
+            drawMotorBarLabels(canvas, 40, top + 34, "RF", rightFrontCmd, "RR", rightRearCmd);
+
+            // Status indicators (top right)
+            const InputManager& inputs = InputManager::getInstance();
+            canvas.drawText(96, top, inputs.getButton1() ? "BRK" : "   ");
+            canvas.drawText(96, top + 8, inputs.getButton2() ? "HNK" : "   ");
+        }
     }
 
     void buildModuleMenu(ModuleMenuBuilder& builder) override {
@@ -244,6 +253,49 @@ public:
         addEasingEntry(builder, easingMenu, GillEasing::EaseOut, "Ease Out");
         addEasingEntry(builder, easingMenu, GillEasing::EaseInOut, "Ease In/Out");
         addEasingEntry(builder, easingMenu, GillEasing::Sine, "Sine");
+
+        // Easing rate adjustment submenu
+        ModuleMenuItem& rateMenu = builder.addSubmenu("thegill.easingrate", "Easing Rate", ICON_TUNING, &root);
+
+        builder.addAction(
+            "thegill.rate.inc",
+            "Increase (+0.5)",
+            [this]() {
+                thegillRuntime.easingRate = constrain(thegillRuntime.easingRate + 0.5f, 0.5f, 20.0f);
+                thegillCommand.easingRate = thegillRuntime.easingRate;
+                Serial.printf("[TheGill] Easing rate: %.1f\n", thegillRuntime.easingRate);
+            },
+            ICON_UP,
+            &rateMenu);
+
+        builder.addAction(
+            "thegill.rate.dec",
+            "Decrease (-0.5)",
+            [this]() {
+                thegillRuntime.easingRate = constrain(thegillRuntime.easingRate - 0.5f, 0.5f, 20.0f);
+                thegillCommand.easingRate = thegillRuntime.easingRate;
+                Serial.printf("[TheGill] Easing rate: %.1f\n", thegillRuntime.easingRate);
+            },
+            ICON_DOWN,
+            &rateMenu);
+
+        builder.addAction(
+            "thegill.rate.reset",
+            "Reset to 4.0",
+            [this]() {
+                thegillRuntime.easingRate = 4.0f;
+                thegillCommand.easingRate = 4.0f;
+                Serial.println("[TheGill] Easing rate reset to 4.0");
+            },
+            ICON_SETTINGS,
+            &rateMenu,
+            0,
+            nullptr,
+            [this]() {
+                static char rateStr[16];
+                snprintf(rateStr, sizeof(rateStr), "%.1f", thegillRuntime.easingRate);
+                return rateStr;
+            });
     }
 
 private:
@@ -336,6 +388,57 @@ private:
     }
 
     // ============================================================================
+    // Dashboard Helper Functions
+    // ============================================================================
+
+    void drawMotorBar(DisplayCanvas& canvas, int x, int y, float actual, float target) {
+        const int width = 72;
+        const int height = 10;
+        const int mid = x + width / 2;
+        const int range = width / 2 - 2;
+
+        // Draw frame
+        canvas.drawRect(x, y, width, height, false);
+
+        // Draw filled portion for actual value
+        int actualPixels = static_cast<int>(roundf(constrain(actual, -1.0f, 1.0f) * range));
+        if (actualPixels >= 0) {
+            canvas.drawRect(mid, y + 1, actualPixels, height - 2, true);  // Filled rect
+        } else {
+            canvas.drawRect(mid + actualPixels, y + 1, -actualPixels, height - 2, true);  // Filled rect
+        }
+    }
+
+    void drawMotorBarLabels(DisplayCanvas& canvas, int x, int y,
+                            const char* frontLabel, float frontValue,
+                            const char* rearLabel, float rearValue) {
+        const int width = 72;
+        const int height = 10;
+
+        char frontBuf[8];
+        char rearBuf[8];
+        formatMotorPercent(frontValue, frontBuf, sizeof(frontBuf));
+        formatMotorPercent(rearValue, rearBuf, sizeof(rearBuf));
+
+        char line[32];
+        snprintf(line, sizeof(line), "%s%s %s%s", frontLabel, frontBuf, rearLabel, rearBuf);
+
+        // Center the text in the bar (XOR mode for visibility)
+        int textWidth = strlen(line) * 5;  // Approximate width
+        int cursorX = x + (width - textWidth) / 2;
+        if (cursorX < x + 1) cursorX = x + 1;
+
+        canvas.setDrawColor(2);  // XOR mode
+        canvas.drawText(cursorX, y + height - 2, line);
+        canvas.setDrawColor(1);  // Normal mode
+    }
+
+    void formatMotorPercent(float value, char* buffer, size_t size) {
+        int percent = static_cast<int>(roundf(constrain(value, -1.0f, 1.0f) * 100.0f));
+        snprintf(buffer, size, "%+d%%", percent);
+    }
+
+    // ============================================================================
     // Framework v2.0 Support - Button Events & Encoder Functions
     // ============================================================================
 
@@ -373,7 +476,77 @@ private:
         f2.toggleState = nullptr;
         fw.setEncoderFunction(1, f2);
 
-        Serial.println("[TheGillModule] Activated with encoder functions");
+        // Register button bindings
+        // Button 3: Toggle between Drive and Arm modes
+        ControlBinding binding1;
+        binding1.input = INPUT_BUTTON3;
+        binding1.event = EVENT_PRESS;
+        binding1.action = []() {
+            if (mechIaneMode == MechIaneMode::DriveMode) {
+                mechIaneMode = MechIaneMode::ArmXYZ;
+                AudioRegistry::play("menu_select");
+            } else {
+                mechIaneMode = MechIaneMode::DriveMode;
+                AudioRegistry::play("menu_select");
+            }
+        };
+        ControlBindingSystem::registerBinding(binding1);
+
+        // Joystick A Button: Toggle XYZ/Orientation control (only in arm mode)
+        ControlBinding binding2;
+        binding2.input = INPUT_JOYSTICK_A_BUTTON;
+        binding2.event = EVENT_PRESS;
+        binding2.action = []() {
+            if (mechIaneMode == MechIaneMode::ArmXYZ) {
+                mechIaneMode = MechIaneMode::ArmOrientation;
+                AudioRegistry::play("menu_select");
+            } else if (mechIaneMode == MechIaneMode::ArmOrientation) {
+                mechIaneMode = MechIaneMode::ArmXYZ;
+                AudioRegistry::play("menu_select");
+            }
+        };
+        binding2.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
+        ControlBindingSystem::registerBinding(binding2);
+
+        // Button 1: Toggle grippers (only in arm mode)
+        {
+            ControlBinding binding3;
+            binding3.input = INPUT_BUTTON1;
+            binding3.event = EVENT_PRESS;
+            binding3.action = []() {
+                const InputManager& inputs = InputManager::getInstance();
+                bool button2Pressed = inputs.getButton2();
+
+                if (button2Pressed) {
+                    // Shift + Button 1: Toggle gripper 1 independently
+                    static float gripperAngleOpen = 45.0f;
+                    static float gripperAngleClosed = 90.0f;
+
+                    if (armCommand.gripper1Degrees == gripperAngleClosed) {
+                        armCommand.gripper1Degrees = gripperAngleOpen;
+                    } else {
+                        armCommand.gripper1Degrees = gripperAngleClosed;
+                    }
+                    armCommand.validMask |= ArmCommandMask::Gripper1;
+                    AudioRegistry::play("menu_select");
+                } else {
+                    // Just Button 1: Toggle both grippers
+                    static bool gripperOpen = false;
+                    static float gripperAngleOpen = 45.0f;
+                    static float gripperAngleClosed = 90.0f;
+
+                    gripperOpen = !gripperOpen;
+                    armCommand.gripper1Degrees = gripperOpen ? gripperAngleOpen : gripperAngleClosed;
+                    armCommand.gripper2Degrees = gripperOpen ? gripperAngleOpen : gripperAngleClosed;
+                    armCommand.validMask |= ArmCommandMask::AllGrippers;
+                    AudioRegistry::play("menu_select");
+                }
+            };
+            binding3.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
+            ControlBindingSystem::registerBinding(binding3);
+        }
+
+        Serial.println("[TheGillModule] Activated with encoder functions and button bindings");
     }
 
     void onDeactivate() override {
@@ -381,6 +554,10 @@ private:
         FrameworkEngine& fw = FrameworkEngine::getInstance();
         fw.clearEncoderFunction(0);
         fw.clearEncoderFunction(1);
+
+        // Clear button bindings
+        ControlBindingSystem::clear();
+
         Serial.println("[TheGillModule] Deactivated");
     }
 
@@ -558,42 +735,91 @@ public:
     }
 
     void drawDashboard(DisplayCanvas& canvas) override {
-        // Simple data-focused dashboard without header/logo
-        int16_t y = 14;
+        // 3D orientation cube visualization matching original ILITE
+        const float xSize = 20.0f;
+        const float ySize = 10.0f;
+        const float zSize = 5.0f;
+        const int16_t top = 14;
+        const int cx = 64;  // Screen width/2
+        const int cy = top + (64 - top) / 2;  // Center Y in available space
 
-        canvas.setFont(DisplayCanvas::NORMAL);
-        canvas.drawTextF(2, y, "Throttle: %u (%.0f%%)",
-                         drongazeCommand.throttle,
-                         (drongazeCommand.throttle - 1000.0f) / 10.0f);
-        y += 10;
+        // 3D cube vertices
+        struct Vec3 { float x, y, z; };
+        const Vec3 verts[8] = {
+            {-xSize,-ySize,-zSize}, { xSize,-ySize,-zSize}, { xSize, ySize,-zSize}, {-xSize, ySize,-zSize},
+            {-xSize,-ySize, zSize}, { xSize,-ySize, zSize}, { xSize, ySize, zSize}, {-xSize, ySize, zSize}
+        };
 
+        int px[8];
+        int py[8];
+
+        // Convert telemetry angles to radians
+        float roll  = drongazeTelemetry.roll * DEG_TO_RAD;
+        float pitch = -drongazeTelemetry.pitch * DEG_TO_RAD;
+        float yaw   = -drongazeTelemetry.yaw * DEG_TO_RAD + PI;
+
+        // Rotate each vertex
+        for (int i = 0; i < 8; i++) {
+            float x = verts[i].x;
+            float y = verts[i].y;
+            float z = verts[i].z;
+
+            // Rotate around X (roll)
+            float y1 = y * cos(roll) - z * sin(roll);
+            float z1 = y * sin(roll) + z * cos(roll);
+            y = y1; z = z1;
+
+            // Rotate around Y (pitch)
+            float x1 = x * cos(pitch) + z * sin(pitch);
+            float z2 = -x * sin(pitch) + z * cos(pitch);
+            x = x1; z = z2;
+
+            // Rotate around Z (yaw)
+            float x2 = x * cos(yaw) - y * sin(yaw);
+            float y2 = x * sin(yaw) + y * cos(yaw);
+            x = x2; y = y2;
+
+            // Project to 2D
+            px[i] = cx + static_cast<int>(x);
+            py[i] = cy - static_cast<int>(y);
+        }
+
+        // Draw cube edges
+        const uint8_t edges[12][2] = {
+            {0,1},{1,2},{2,3},{3,0},  // Back face
+            {4,5},{5,6},{6,7},{7,4},  // Front face
+            {0,4},{1,5},{2,6},{3,7}   // Connecting edges
+        };
+
+        for (int i = 0; i < 12; i++) {
+            canvas.drawLine(px[edges[i][0]], py[edges[i][0]],
+                          px[edges[i][1]], py[edges[i][1]]);
+        }
+
+        // Draw vertical acceleration arrow
+        int arrowLen = map(static_cast<int>(drongazeTelemetry.verticalAcc * 100), -1000, 1000, -20, 20);
+        arrowLen = constrain(arrowLen, -25, 25);
+        canvas.drawLine(cx, cy, cx, cy - arrowLen);
+
+        // Draw arrow head
+        if (arrowLen != 0) {
+            int head = cy - arrowLen;
+            int dir = (arrowLen > 0) ? -5 : 5;
+            canvas.drawTriangle(cx, head, cx - 3, head + dir, cx + 3, head + dir, true);
+        }
+
+        // Telemetry text overlay (left side)
         canvas.setFont(DisplayCanvas::SMALL);
-        canvas.drawTextF(2, y, "Command Angles:");
-        y += 9;
-        canvas.drawTextF(2, y, "  Pitch: %4d  Roll: %4d",
-                         drongazeCommand.pitchAngle,
-                         drongazeCommand.rollAngle);
-        y += 9;
-        canvas.drawTextF(2, y, "  Yaw:   %4d", drongazeCommand.yawAngle);
-        y += 10;
-
-        canvas.drawTextF(2, y, "Telemetry:");
-        y += 9;
-        canvas.drawTextF(2, y, "  P:%5.1f R:%5.1f Y:%5.1f",
-                         drongazeTelemetry.pitch,
-                         drongazeTelemetry.roll,
-                         drongazeTelemetry.yaw);
-        y += 9;
-        canvas.drawTextF(2, y, "  Stab:%s Mask:0x%02X",
-                         drongazeState.stabilizationGlobal ? "ON " : "OFF",
-                         drongazeTelemetry.stabilizationMask);
-
-        // Status indicators at bottom
-        canvas.setFont(DisplayCanvas::TINY);
-        canvas.drawTextF(2, 62, "Age:%lums [%s] Prec:%s",
-                         static_cast<unsigned long>(drongazeTelemetry.commandAge),
-                         drongazeCommand.arm_motors ? "ARMED" : "SAFE",
-                         drongazeState.precisionMode ? "ON" : "OFF");
+        int16_t textY = top + 6;
+        canvas.drawText(0, textY, "Alt:N/A");
+        textY += 8;
+        canvas.drawTextF(0, textY, "Thr:%u", drongazeCommand.throttle);
+        textY += 8;
+        canvas.drawTextF(0, textY, "P:%d", drongazeCommand.pitchAngle);
+        textY += 8;
+        canvas.drawTextF(0, textY, "R:%d", drongazeCommand.rollAngle);
+        textY += 8;
+        canvas.drawTextF(0, textY, "Y:%d", drongazeCommand.yawAngle);
     }
 
     void buildModuleMenu(ModuleMenuBuilder& builder) override {
@@ -617,11 +843,79 @@ public:
             &root);
 
         builder.addAction(
+            "drongaze.yaw.reset",
+            "Reset Yaw to 0",
+            [this]() {
+                drongazeState.yawCommand = 0;
+                drongazeCommand.yawAngle = 0;
+                Serial.println("[DroneGaze] Yaw reset to 0");
+            },
+            ICON_SETTINGS,
+            &root,
+            0,
+            nullptr,
+            [this]() {
+                static char yawStr[16];
+                snprintf(yawStr, sizeof(yawStr), "Yaw:%d", drongazeState.yawCommand);
+                return yawStr;
+            });
+
+        builder.addAction(
             "drongaze.pid.refresh",
             "Request PID Gains",
             []() { requestDrongazePidGains(); },
             ICON_TUNING,
             &root);
+
+        // Stabilization controls submenu
+        ModuleMenuItem& stabMenu = builder.addSubmenu("drongaze.stab", "Stabilization", ICON_SETTINGS, &root);
+
+        builder.addAction(
+            "drongaze.stab.pitch",
+            "Toggle Pitch",
+            []() { toggleDrongazeAxisStabilization(0); },
+            ICON_TUNING,
+            &stabMenu);
+
+        builder.addAction(
+            "drongaze.stab.roll",
+            "Toggle Roll",
+            []() { toggleDrongazeAxisStabilization(1); },
+            ICON_TUNING,
+            &stabMenu);
+
+        builder.addAction(
+            "drongaze.stab.yaw",
+            "Toggle Yaw",
+            []() { toggleDrongazeAxisStabilization(2); },
+            ICON_TUNING,
+            &stabMenu);
+    }
+
+    // ========================================================================
+    // Custom Screens - PID Tuner
+    // ========================================================================
+
+    size_t getCustomScreenCount() const override { return 1; }
+
+    const char* getCustomScreenName(size_t index) const override {
+        if (index == 0) return "PID Tuner";
+        return "";
+    }
+
+    void drawCustomScreen(size_t index, DisplayCanvas& canvas) override {
+        if (index == 0) {
+            // Cast away const since renderPidTuner modifies state
+            const_cast<DrongazeModule*>(this)->renderPidTuner(canvas);
+        }
+    }
+
+    void onEncoderRotate(int delta) override {
+        handlePidTunerEncoderRotate(delta);
+    }
+
+    void onEncoderButton() override {
+        handlePidTunerEncoderPress();
     }
 
 private:
@@ -640,6 +934,117 @@ private:
         drongazeState.precisionMode = !drongazeState.precisionMode;
         Serial.printf("[DrongazeModule] Precision mode %s\n",
                       drongazeState.precisionMode ? "enabled" : "disabled");
+    }
+
+    // ========================================================================
+    // PID Tuner Screen
+    // ========================================================================
+
+    struct PidTunerState {
+        int cursorPos = 0;      // 0=axis, 1=param, 2=value, 3=send
+        int selectedAxis = 0;    // 0=pitch, 1=roll, 2=yaw
+        int selectedParam = 0;   // 0=Kp, 1=Ki, 2=Kd
+        bool coarseStep = false; // false=fine (0.01), true=coarse (0.1)
+    };
+
+    PidTunerState pidTuner;
+
+    void renderPidTuner(DisplayCanvas& canvas) {
+        const int16_t top = 14;
+        canvas.setFont(DisplayCanvas::SMALL);
+
+        // Title
+        canvas.drawText(30, top, "PID TUNER");
+
+        int16_t y = top + 12;
+
+        // Axis selection
+        canvas.drawText(0, y, "Axis:");
+        const char* axisNames[3] = {"Pitch", "Roll", "Yaw"};
+        if (pidTuner.cursorPos == 0) canvas.drawText(30, y, ">");
+        canvas.drawText(36, y, axisNames[pidTuner.selectedAxis]);
+        y += 10;
+
+        // Parameter selection
+        canvas.drawText(0, y, "Param:");
+        const char* paramNames[3] = {"Kp", "Ki", "Kd"};
+        if (pidTuner.cursorPos == 1) canvas.drawText(30, y, ">");
+        canvas.drawText(36, y, paramNames[pidTuner.selectedParam]);
+        y += 10;
+
+        // Current value and step size
+        float* gainPtr = nullptr;
+        if (pidTuner.selectedParam == 0) {
+            gainPtr = &drongazeState.pidGains[pidTuner.selectedAxis].kp;
+        } else if (pidTuner.selectedParam == 1) {
+            gainPtr = &drongazeState.pidGains[pidTuner.selectedAxis].ki;
+        } else {
+            gainPtr = &drongazeState.pidGains[pidTuner.selectedAxis].kd;
+        }
+
+        canvas.drawText(0, y, "Value:");
+        if (pidTuner.cursorPos == 2) canvas.drawText(30, y, ">");
+        canvas.drawTextF(36, y, "%.2f", *gainPtr);
+        y += 10;
+
+        // Step size toggle
+        canvas.drawText(0, y, "Step:");
+        if (pidTuner.cursorPos == 2) canvas.drawText(30, y, ">");
+        canvas.drawText(36, y, pidTuner.coarseStep ? "Coarse" : "Fine");
+        y += 2;
+
+        // Send button
+        y += 10;
+        if (pidTuner.cursorPos == 3) {
+            canvas.drawRect(30, y - 8, 70, 10, false);
+        }
+        canvas.drawText(32, y, "[Send to Drone]");
+    }
+
+    void handlePidTunerEncoderRotate(int delta) {
+        if (pidTuner.cursorPos == 0) {
+            // Rotate through axes
+            pidTuner.selectedAxis = (pidTuner.selectedAxis + delta + 3) % 3;
+        } else if (pidTuner.cursorPos == 1) {
+            // Rotate through parameters
+            pidTuner.selectedParam = (pidTuner.selectedParam + delta + 3) % 3;
+        } else if (pidTuner.cursorPos == 2) {
+            // Adjust value
+            float step = pidTuner.coarseStep ? 0.1f : 0.01f;
+            float adjustment = delta * step;
+
+            float* gainPtr = nullptr;
+            if (pidTuner.selectedParam == 0) {
+                gainPtr = &drongazeState.pidGains[pidTuner.selectedAxis].kp;
+            } else if (pidTuner.selectedParam == 1) {
+                gainPtr = &drongazeState.pidGains[pidTuner.selectedAxis].ki;
+            } else {
+                gainPtr = &drongazeState.pidGains[pidTuner.selectedAxis].kd;
+            }
+
+            *gainPtr = constrain(*gainPtr + adjustment, 0.0f, 10.0f);
+            AudioRegistry::play("menu_select");
+        } else {
+            // Navigate to/from send button
+            pidTuner.cursorPos = constrain(pidTuner.cursorPos + delta, 0, 3);
+        }
+    }
+
+    void handlePidTunerEncoderPress() {
+        if (pidTuner.cursorPos < 2) {
+            // Move to next field
+            pidTuner.cursorPos++;
+            AudioRegistry::play("menu_select");
+        } else if (pidTuner.cursorPos == 2) {
+            // Toggle step size
+            pidTuner.coarseStep = !pidTuner.coarseStep;
+            AudioRegistry::play("menu_select");
+        } else if (pidTuner.cursorPos == 3) {
+            // Send PID gains to drone
+            sendDrongazePidGains(pidTuner.selectedAxis);
+            AudioRegistry::play("paired");
+            Serial.printf("[DroneGaze] Sent PID gains for axis %d\n", pidTuner.selectedAxis);
+        }
     }
 
     // ============================================================================
@@ -788,22 +1193,55 @@ public:
 
     void updateControl(const InputManager& inputs, float dt) override {
         (void)dt;
-        const float forward = applyDeadzone(inputs.getJoystickB_Y());
-        const float turn = applyDeadzone(inputs.getJoystickB_X());
 
-        bulkyState.motionState = computeMotionState(forward, turn);
-        bulkyState.targetSpeed = static_cast<int8_t>(clampValue(forward, -1.0f, 1.0f) * 100.0f);
+        // Read RAW joystick values (0-4095) using InputManager - no framework easing
+        int16_t joyX = inputs.getJoystickB_X_Raw();
+        int16_t joyY = inputs.getJoystickB_Y_Raw();
 
-        int speedScale = static_cast<int>(clampValue(inputs.getPotentiometer(), 0.0f, 1.0f) * 100.0f);
-        if (bulkyState.slowModeActive) {
-            speedScale = std::min(speedScale, 40);
+        // Map joystick Y to speed (-100 to 100)
+        int16_t mappedY = map(joyY, 0, 4095, -100, 100);
+
+        // Apply deadzone
+        if (abs(mappedY) < 10) {
+            mappedY = 0;
         }
 
-        bulkyCommand.speed = static_cast<int8_t>((bulkyState.targetSpeed * speedScale) / 100);
+        bulkyState.targetSpeed = static_cast<int8_t>(mappedY);
+
+        // Map joystick X to motion state (for turning/steering)
+        int16_t mappedX = map(joyX, 0, 4095, -100, 100);
+
+        // Simple motion state encoding:
+        // 0 = stop, 1 = forward, 2 = backward, 3 = turn left, 4 = turn right
+        if (abs(mappedY) < 10 && abs(mappedX) < 10) {
+            bulkyState.motionState = 0; // Stop
+        } else if (abs(mappedX) > abs(mappedY)) {
+            // Turning dominates
+            bulkyState.motionState = (mappedX > 0) ? 4 : 3; // Turn right : Turn left
+        } else {
+            // Forward/backward dominates
+            bulkyState.motionState = (mappedY > 0) ? 1 : 2; // Forward : Backward
+        }
+
+        // Read speed potentiometer for speed scaling
+        uint16_t potValue = inputs.getPotentiometer_Raw();
+        uint8_t speedScale = map(potValue, 0, 4095, 0, 100);
+
+        // Apply slow mode limit
+        if (bulkyState.slowModeActive) {
+            speedScale = std::min<uint8_t>(speedScale, 40);
+        }
+
+        // Apply speed scaling
+        bulkyCommand.speed = (bulkyState.targetSpeed * speedScale) / 100;
         bulkyCommand.motionState = bulkyState.motionState;
-        bulkyCommand.buttonStates[0] = bulkyState.honkActive ? 1 : 0;
-        bulkyCommand.buttonStates[1] = bulkyState.lightActive ? 1 : 0;
-        bulkyCommand.buttonStates[2] = bulkyState.slowModeActive ? 1 : 0;
+
+        // Read button states using InputManager
+        bulkyCommand.buttonStates[0] = inputs.getButton1() ? 1 : 0;
+        bulkyCommand.buttonStates[1] = inputs.getButton2() ? 1 : 0;
+        bulkyCommand.buttonStates[2] = inputs.getButton3() ? 1 : 0;
+
+        // Increment reply index
         bulkyCommand.replyIndex++;
     }
 
@@ -822,36 +1260,157 @@ public:
     }
 
     void drawDashboard(DisplayCanvas& canvas) override {
-        // Simple data-focused dashboard without header/logo
-        int16_t y = 14;
+        // Graphical dashboard matching original ILITE Bulky layout
+        const int16_t baseY = 14;  // Below top strip
 
-        canvas.setFont(DisplayCanvas::NORMAL);
-        canvas.drawTextF(2, y, "Motion: %s", motionLabel(bulkyState.motionState));
-        y += 10;
+        // Fire position bar (horizontal with icon showing servo position)
+        drawFirePosition(canvas, baseY + 7);
 
-        canvas.setFont(DisplayCanvas::SMALL);
-        canvas.drawTextF(2, y, "Speed: Target %d%%", bulkyState.targetSpeed);
-        y += 9;
-        canvas.drawTextF(2, y, "       Actual %d%%", bulkyTelemetry.currentSpeed);
-        y += 10;
+        // Line follower (4-segment display)
+        drawLineFollower(canvas, baseY - 13);
 
-        canvas.drawTextF(2, y, "Sensors:");
-        y += 9;
-        canvas.drawTextF(2, y, "  Front:  %3dcm", bulkyTelemetry.frontDistance);
-        y += 9;
-        canvas.drawTextF(2, y, "  Bottom: %3dcm", bulkyTelemetry.bottomDistance);
-        y += 9;
-        canvas.drawTextF(2, y, "  Line: 0x%02X  Fire: %3d",
-                         bulkyTelemetry.linePosition,
-                         bulkyTelemetry.firePose);
+        // Motion joystick (right side, lower)
+        drawMotionJoystick(canvas, baseY + 18);
 
-        // Status indicators at bottom
-        canvas.setFont(DisplayCanvas::TINY);
-        canvas.drawTextF(2, 62, "%s%s%s",
-                         bulkyState.honkActive ? "[HONK]" : "",
-                         bulkyState.lightActive ? "[LITE]" : "",
-                         bulkyState.slowModeActive ? "[SLOW]" : "");
+        // Peripheral joystick (right side, upper)
+        drawPeripheralJoystick(canvas, baseY - 1);
+
+        // Proximity sensors (vertical bars)
+        drawProximitySensors(canvas, baseY + 8);
+
+        // Speed bar (horizontal with value overlay)
+        drawSpeedBar(canvas, baseY + 20);
     }
+
+private:
+    void drawFirePosition(DisplayCanvas& canvas, int16_t frameY) {
+        // 71x12px horizontal bar showing servo position (0-180 degrees)
+        const int16_t x = 28;
+        const int16_t w = 71;
+        const int16_t h = 12;
+
+        canvas.drawRoundRect(x, frameY, w, h, 4, false);
+
+        // Map fire position (0-180) to bar position
+        int iconX = map(bulkyTelemetry.firePose, 0, 180, x + w - 8, x + 8);
+        iconX = constrain(iconX, x + 2, x + w - 10);
+
+        // Draw icon/marker at position
+        canvas.setFont(DisplayCanvas::SMALL);
+        canvas.drawText(iconX, frameY + h - 2, "^");
+    }
+
+    void drawLineFollower(DisplayCanvas& canvas, int16_t frameY) {
+        // 4-segment line follower display (20x15px)
+        const int16_t x = 1;
+        const int16_t w = 20;
+        const int16_t h = 15;
+
+        canvas.drawRoundRect(x, frameY, w, h, 3, false);
+
+        // Draw 4 segments based on line position bits
+        uint8_t linePos = bulkyTelemetry.linePosition;
+        int16_t fillY = frameY + 2;
+        int16_t fillH = 11;
+
+        if (linePos & 0x08) canvas.drawRect(x + 2, fillY, 3, fillH, true);   // Bit 3
+        if (linePos & 0x04) canvas.drawRect(x + 6, fillY, 3, fillH, true);   // Bit 2
+        if (linePos & 0x02) canvas.drawRect(x + 11, fillY, 3, fillH, true);  // Bit 1
+        if (linePos & 0x01) canvas.drawRect(x + 15, fillY, 3, fillH, true);  // Bit 0
+    }
+
+    void drawMotionJoystick(DisplayCanvas& canvas, int16_t frameY) {
+        // 25x18px frame with 3x3 dot showing joystick B position
+        const int16_t x = 100;
+        const int16_t w = 25;
+        const int16_t h = 18;
+
+        canvas.drawRoundRect(x, frameY, w, h, 3, false);
+
+        // Map joystick values (assume -1 to +1 range) to frame
+        const InputManager& inputs = InputManager::getInstance();
+        float joyX = inputs.getJoystickB_X();  // -1 to +1
+        float joyY = inputs.getJoystickB_Y();  // -1 to +1
+
+        int dotX = x + w/2 + static_cast<int>((joyX * (w-6) / 2.0f));
+        int dotY = frameY + h/2 + static_cast<int>((joyY * (h-6) / 2.0f));
+
+        canvas.drawRoundRect(dotX, dotY, 3, 3, 1, true);
+    }
+
+    void drawPeripheralJoystick(DisplayCanvas& canvas, int16_t frameY) {
+        // 25x18px frame with 3x3 dot showing joystick A position
+        const int16_t x = 100;
+        const int16_t w = 25;
+        const int16_t h = 18;
+
+        canvas.drawRoundRect(x, frameY, w, h, 3, false);
+
+        const InputManager& inputs = InputManager::getInstance();
+        float joyX = inputs.getJoystickA_X();
+        float joyY = inputs.getJoystickA_Y();
+
+        int dotX = x + w/2 + static_cast<int>((joyX * (w-6) / 2.0f));
+        int dotY = frameY + h/2 + static_cast<int>((joyY * (h-6) / 2.0f));
+
+        canvas.drawRoundRect(dotX, dotY, 3, 3, 1, true);
+    }
+
+    void drawProximitySensors(DisplayCanvas& canvas, int16_t baseY) {
+        // Two vertical bars showing front/bottom distance (0-50cm)
+        const int16_t w = 12;
+        const int16_t h = 28;
+        const int16_t y = baseY;
+
+        // Bottom sensor (left bar)
+        canvas.drawRoundRect(1, y, w, h, 3, false);
+        int bottomFill = map(bulkyTelemetry.bottomDistance, 0, 50, 27, 0);
+        bottomFill = constrain(bottomFill, 0, 27);
+        if (bottomFill > 0) {
+            canvas.drawRect(3, y + 21, 8, bottomFill, true);
+        }
+
+        // Front sensor (right bar)
+        canvas.drawRoundRect(14, y, w, h, 3, false);
+        int frontFill = map(bulkyTelemetry.frontDistance, 0, 50, 27, 0);
+        frontFill = constrain(frontFill, 0, 27);
+        if (frontFill > 0) {
+            canvas.drawRect(16, y + 21, 8, frontFill, true);
+        }
+    }
+
+    void drawSpeedBar(DisplayCanvas& canvas, int16_t frameY) {
+        // 71x12px bar with speed value and pot indicator
+        const int16_t x = 28;
+        const int16_t w = 71;
+        const int16_t h = 12;
+
+        canvas.drawRoundRect(x, frameY, w, h, 4, false);
+
+        // Fill based on command speed (-100 to +100)
+        int speed = abs(bulkyCommand.speed);
+        int fillW = map(speed, 0, 100, 0, w - 4);
+        fillW = constrain(fillW, 0, w - 4);
+        if (fillW > 0) {
+            canvas.drawRect(x + 2, frameY + 2, fillW, h - 4, true);
+        }
+
+        // Draw speed value (XOR mode for visibility)
+        canvas.setFont(DisplayCanvas::NORMAL);
+        canvas.setDrawColor(2);  // XOR
+        char speedStr[8];
+        snprintf(speedStr, sizeof(speedStr), "%d", speed);
+        canvas.drawText(x + w/2 - 8, frameY + h - 2, speedStr);
+        canvas.setDrawColor(1);  // Normal
+
+        // Pot position indicator line (below bar)
+        const InputManager& inputs = InputManager::getInstance();
+        float potVal = inputs.getPotentiometer();  // 0.0 to 1.0
+        int lineX = x + static_cast<int>(potVal * (w - 1));
+        canvas.drawVLine(lineX, frameY + h + 1, 3);
+    }
+
+public:
 
     void buildModuleMenu(ModuleMenuBuilder& builder) override {
         builder.clear();

@@ -3,8 +3,31 @@
 #include "ModuleRegistry.h"
 #include "InputManager.h"
 #include "DisplayCanvas.h"
+#include "InverseKinematics.h"
 #include "input.h"
 #include <math.h>
+
+// Helper to convert InputManager normalized values (-1.0 to +1.0) to motor range
+static inline int16_t normalizedToMotor(float normalized) {
+    return static_cast<int16_t>(normalized * 32767.0f);
+}
+
+// Helper to apply easing curve to normalized input (-1.0 to +1.0)
+static inline float applyEasing(float input, GillEasing easing) {
+    if (easing == GillEasing::None || fabsf(input) < 0.001f) {
+        return input;
+    }
+
+    // Get sign and work with absolute value
+    float sign = (input < 0.0f) ? -1.0f : 1.0f;
+    float absValue = fabsf(input);
+
+    // Apply easing curve (0.0 to 1.0 range)
+    float eased = applyEasingCurve(easing, absValue);
+
+    // Restore sign
+    return eased * sign;
+}
 
 ThegillCommand thegillCommand{
   THEGILL_PACKET_MAGIC,
@@ -40,6 +63,27 @@ ThegillTelemetryPacket thegillTelemetryPacket{
   0
 };
 
+// Mech'Iane Arm Control State
+ArmControlCommand armCommand{
+  ARM_COMMAND_MAGIC,
+  0.0f, 90.0f, 90.0f, 90.0f, 90.0f, 90.0f, 90.0f, 90.0f,
+  0,
+  0,
+  0
+};
+
+MechIaneMode mechIaneMode = MechIaneMode::DriveMode;
+
+// Mech'Iane control state variables (non-static for external access)
+IKEngine::Vec3 targetPosition{200.0f, 0.0f, 150.0f};  // Target XYZ in mm
+IKEngine::Vec3 targetOrientation{0.0f, 0.0f, 1.0f};   // Tool direction vector
+IKEngine::InverseKinematics ikSolver;
+static bool gripperOpen = false;
+static bool lastButton3State = false;
+static bool lastJoyBtnAState = false;
+static float gripperAngleOpen = 45.0f;
+static float gripperAngleClosed = 90.0f;
+
 
 float applyEasingCurve(GillEasing mode, float t){
   if(t <= 0.f) return 0.f;
@@ -69,72 +113,161 @@ float applyEasingCurve(GillEasing mode, float t){
 // ============================================================================
 
 void updateThegillControl() {
-    if (thegillConfig.mode == GillMode::Default) {
-        // Tank drive mode: Left joystick Y = left motors, Right joystick Y = right motors
-        int16_t leftY = analogRead(joystickA_Y);
-        int16_t rightY = analogRead(joystickB_Y);
+    // Mode switching is now handled by ControlBindingSystem in ModuleRegistration.cpp
 
-        // Map to motor range (assuming 4095 = max forward, 0 = max reverse, 2048 = center)
-        int16_t leftMotor = map(leftY, 0, 4095, -32767, 32767);
-        int16_t rightMotor = map(rightY, 0, 4095, -32767, 32767);
+    // ========================================================================
+    // DRIVE MODE - Normal drivetrain control
+    // ========================================================================
+    if (mechIaneMode == MechIaneMode::DriveMode) {
+        // Get InputManager instance for calibrated, filtered joystick values
+        const InputManager& inputs = InputManager::getInstance();
 
-        // Apply deadzone (10%)
-        if (abs(leftMotor) < 3276) leftMotor = 0;
-        if (abs(rightMotor) < 3276) rightMotor = 0;
+        if (thegillConfig.mode == GillMode::Default) {
+            // Tank drive mode: Left joystick Y = left motors, Right joystick Y = right motors
+            // InputManager provides -1.0 to +1.0 with deadzone and filtering applied
+            float leftY = inputs.getJoystickA_Y();
+            float rightY = inputs.getJoystickB_Y();
 
-        // Update command (both front and rear get same value for each side)
-        thegillCommand.leftFront = leftMotor;
-        thegillCommand.leftRear = leftMotor;
-        thegillCommand.rightFront = rightMotor;
-        thegillCommand.rightRear = rightMotor;
+            // Apply easing curve on controller side
+            leftY = applyEasing(leftY, thegillConfig.easing);
+            rightY = applyEasing(rightY, thegillConfig.easing);
 
-    } else {
-        // Differential mode: One joystick controls both forward/back and turning
-        int16_t joyY = analogRead(joystickA_Y);
-        int16_t joyX = analogRead(joystickA_X);
+            // Convert to motor range (-32767 to +32767)
+            int16_t leftMotor = normalizedToMotor(leftY);
+            int16_t rightMotor = normalizedToMotor(rightY);
 
-        // Map to -100 to +100 range for easier math
-        int16_t throttle = map(joyY, 0, 4095, -100, 100);
-        int16_t turn = map(joyX, 0, 4095, -100, 100);
+            // Update command (both front and rear get same value for each side)
+            thegillCommand.leftFront = leftMotor;
+            thegillCommand.leftRear = leftMotor;
+            thegillCommand.rightFront = rightMotor;
+            thegillCommand.rightRear = rightMotor;
 
-        // Apply deadzone
-        if (abs(throttle) < 10) throttle = 0;
-        if (abs(turn) < 10) turn = 0;
+        } else {
+            // Differential mode: One joystick controls both forward/back and turning
+            // InputManager provides -1.0 to +1.0 with deadzone and filtering applied
+            float throttle = inputs.getJoystickA_Y();
+            float turn = inputs.getJoystickA_X();
 
-        // Differential drive calculation
-        int16_t leftMotor = throttle + turn;
-        int16_t rightMotor = throttle - turn;
+            // Apply easing curve on controller side
+            throttle = applyEasing(throttle, thegillConfig.easing);
+            turn = applyEasing(turn, thegillConfig.easing);
 
-        // Clamp to range
-        leftMotor = constrain(leftMotor, -100, 100);
-        rightMotor = constrain(rightMotor, -100, 100);
+            // Differential drive calculation
+            float leftMotor = constrain(throttle + turn, -1.0f, 1.0f);
+            float rightMotor = constrain(throttle - turn, -1.0f, 1.0f);
 
-        // Scale to int16_t range
-        thegillCommand.leftFront = leftMotor * 327;
-        thegillCommand.leftRear = leftMotor * 327;
-        thegillCommand.rightFront = rightMotor * 327;
-        thegillCommand.rightRear = rightMotor * 327;
-    }
+            // Convert to motor range
+            thegillCommand.leftFront = normalizedToMotor(leftMotor);
+            thegillCommand.leftRear = normalizedToMotor(leftMotor);
+            thegillCommand.rightFront = normalizedToMotor(rightMotor);
+            thegillCommand.rightRear = normalizedToMotor(rightMotor);
+        }
 
-    // Update config in command packet
-    thegillCommand.mode = thegillConfig.mode;
-    thegillCommand.easing = thegillConfig.easing;
-    thegillCommand.easingRate = thegillRuntime.easingRate;
+        // Update config in command packet
+        thegillCommand.mode = thegillConfig.mode;
+        thegillCommand.easing = thegillConfig.easing;
+        thegillCommand.easingRate = thegillRuntime.easingRate;
 
-    // Read button states for brake/honk
-    thegillCommand.flags = 0;
-    if (digitalRead(button1)) {
-        thegillCommand.flags |= GILL_FLAG_BRAKE;
-        thegillRuntime.brakeActive = true;
-    } else {
+        // Button states are handled by ControlBindingSystem
+        // Brake and honk are not used in drive mode by default
+        thegillCommand.flags = 0;
         thegillRuntime.brakeActive = false;
+        thegillRuntime.honkActive = false;
     }
 
-    if (digitalRead(button2)) {
-        thegillCommand.flags |= GILL_FLAG_HONK;
-        thegillRuntime.honkActive = true;
-    } else {
-        thegillRuntime.honkActive = false;
+    // ========================================================================
+    // ARM CONTROL MODE - Mech'Iane control with IK
+    // ========================================================================
+    else {
+        // Stop drivetrain motors when in arm mode
+        thegillCommand.leftFront = 0;
+        thegillCommand.leftRear = 0;
+        thegillCommand.rightFront = 0;
+        thegillCommand.rightRear = 0;
+        thegillCommand.flags = 0;
+
+        // XYZ/Orientation toggle is now handled by ControlBindingSystem in ModuleRegistration.cpp
+
+        // Read joysticks using InputManager (provides -1.0 to +1.0 with filtering and deadzone)
+        const InputManager& inputs = InputManager::getInstance();
+        float joyAX = inputs.getJoystickA_X();
+        float joyAY = inputs.getJoystickA_Y();
+        float joyBY = inputs.getJoystickB_Y();
+
+        if (mechIaneMode == MechIaneMode::ArmXYZ) {
+            // XYZ Position Control
+            // Joystick A X -> X axis (left/right)
+            // Joystick A Y -> Y axis (forward/back)
+            // Joystick B Y -> Z axis (up/down)
+
+            const float positionSpeed = 5.0f; // mm per frame at max joystick
+            targetPosition.x += joyAX * positionSpeed;
+            targetPosition.y += joyAY * positionSpeed;
+            targetPosition.z += joyBY * positionSpeed;
+
+            // Clamp target position to reasonable workspace
+            targetPosition.x = constrain(targetPosition.x, 50.0f, 450.0f);
+            targetPosition.y = constrain(targetPosition.y, -300.0f, 300.0f);
+            targetPosition.z = constrain(targetPosition.z, 0.0f, 400.0f);
+
+        } else {
+            // Orientation Control (Pitch/Yaw/Roll)
+            // Joystick A X -> Yaw
+            // Joystick A Y -> Pitch
+            // Joystick B Y -> Roll
+
+            const float orientSpeed = 0.05f; // radians per frame at max joystick
+
+            // Update target orientation using spherical coordinates
+            // Convert current direction to spherical
+            float length = sqrtf(targetOrientation.x * targetOrientation.x +
+                               targetOrientation.y * targetOrientation.y +
+                               targetOrientation.z * targetOrientation.z);
+
+            if (length > 0.001f) {
+                float pitch = asinf(targetOrientation.z / length);
+                float yaw = atan2f(targetOrientation.y, targetOrientation.x);
+
+                // Apply joystick inputs
+                pitch += joyAY * orientSpeed;
+                yaw += joyAX * orientSpeed;
+
+                // Clamp pitch to avoid singularities
+                pitch = constrain(pitch, -PI/2.0f + 0.1f, PI/2.0f - 0.1f);
+
+                // Convert back to Cartesian
+                targetOrientation.x = cosf(pitch) * cosf(yaw);
+                targetOrientation.y = cosf(pitch) * sinf(yaw);
+                targetOrientation.z = sinf(pitch);
+
+                // Normalize
+                length = sqrtf(targetOrientation.x * targetOrientation.x +
+                             targetOrientation.y * targetOrientation.y +
+                             targetOrientation.z * targetOrientation.z);
+                if (length > 0.001f) {
+                    targetOrientation.x /= length;
+                    targetOrientation.y /= length;
+                    targetOrientation.z /= length;
+                }
+            }
+        }
+
+        // Solve IK for current target
+        IKEngine::IKSolution solution;
+        ikSolver.solve(targetPosition, targetOrientation, solution);
+
+        // Update arm command with IK solution
+        armCommand.extensionMillimeters = solution.joints.elbowExtensionMm;
+        armCommand.shoulderDegrees = solution.joints.shoulderDeg;
+        armCommand.elbowDegrees = solution.joints.elbowDeg;
+        armCommand.pitchDegrees = solution.joints.gripperPitchDeg;
+        armCommand.rollDegrees = solution.joints.gripperRollDeg;
+        armCommand.yawDegrees = solution.joints.gripperYawDeg;
+
+        armCommand.validMask = ArmCommandMask::AllServos | ArmCommandMask::Extension;
+
+        // Gripper control is now handled by ControlBindingSystem in ModuleRegistration.cpp
+        // TODO: Implement gripper control bindings in ModuleRegistration.cpp
     }
 }
 
@@ -156,5 +289,186 @@ static const uint8_t thegill_logo_32x32[] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+
+// ============================================================================
+// 3D Arm Visualization Helper Functions
+// ============================================================================
+
+// Simple 3D to 2D isometric projection
+struct Point2D {
+    int16_t x;
+    int16_t y;
+};
+
+Point2D projectIsometric(float x, float y, float z, float scale = 0.12f) {
+    // Isometric projection from top-left corner viewpoint
+    // Uses rotation angles for better depth perception
+    const float angleX = 0.615f;  // ~35 degrees
+    const float angleZ = 0.785f;  // 45 degrees
+
+    // Apply rotation matrices
+    float cosX = cosf(angleX);
+    float sinX = sinf(angleX);
+    float cosZ = cosf(angleZ);
+    float sinZ = sinf(angleZ);
+
+    // Rotate around Z axis first (horizontal rotation)
+    float x1 = x * cosZ - y * sinZ;
+    float y1 = x * sinZ + y * cosZ;
+    float z1 = z;
+
+    // Then rotate around X axis (vertical tilt)
+    float x2 = x1;
+    float y2 = y1 * cosX - z1 * sinX;
+    float z2 = y1 * sinX + z1 * cosX;
+
+    // Project to 2D with offset to center on screen
+    Point2D p;
+    p.x = static_cast<int16_t>(x2 * scale + 84);   // Offset right
+    p.y = static_cast<int16_t>(-y2 * scale + 45);  // Offset down, flip Y
+    return p;
+}
+
+void drawDottedLine(DisplayCanvas& canvas, int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t dotSpacing = 3) {
+    // Draw a dotted line by plotting dots at intervals
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy);
+
+    if (len < 1.0f) return;
+
+    float stepX = dx / len;
+    float stepY = dy / len;
+
+    for (float t = 0; t < len; t += dotSpacing) {
+        int16_t px = x0 + static_cast<int16_t>(stepX * t);
+        int16_t py = y0 + static_cast<int16_t>(stepY * t);
+        canvas.drawPixel(px, py);
+    }
+}
+
+void drawCylinder(DisplayCanvas& canvas, Point2D p1, Point2D p2, int16_t radius = 2) {
+    // Draw a 3D cylinder outline between two points
+    // Calculate perpendicular offset for cylinder walls
+    float dx = p2.x - p1.x;
+    float dy = p2.y - p1.y;
+    float len = sqrtf(dx * dx + dy * dy);
+
+    if (len < 0.1f) {
+        // Too short, just draw a circle
+        canvas.drawCircle(p1.x, p1.y, radius, false);
+        return;
+    }
+
+    // Perpendicular vector
+    float perpX = -dy / len * radius;
+    float perpY = dx / len * radius;
+
+    // Draw four edges of the cylinder
+    canvas.drawLine(p1.x + perpX, p1.y + perpY, p2.x + perpX, p2.y + perpY);
+    canvas.drawLine(p1.x - perpX, p1.y - perpY, p2.x - perpX, p2.y - perpY);
+
+    // Draw end caps
+    canvas.drawCircle(p1.x, p1.y, radius, false);
+    canvas.drawCircle(p2.x, p2.y, radius, false);
+}
+
+void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& solution) {
+    // Draw 3D isometric view of the arm based on IK solution
+    canvas.setDrawColor(1);
+
+    // Draw dotted grid on XY plane for depth perception
+    const int gridSize = 500;  // Grid extends +/- 500mm
+    const int gridStep = 100;  // 100mm grid spacing
+
+    for (int x = -gridSize; x <= gridSize; x += gridStep) {
+        Point2D p1 = projectIsometric(x, -gridSize, 0);
+        Point2D p2 = projectIsometric(x, gridSize, 0);
+        drawDottedLine(canvas, p1.x, p1.y, p2.x, p2.y, 4);
+    }
+
+    for (int y = -gridSize; y <= gridSize; y += gridStep) {
+        Point2D p1 = projectIsometric(-gridSize, y, 0);
+        Point2D p2 = projectIsometric(gridSize, y, 0);
+        drawDottedLine(canvas, p1.x, p1.y, p2.x, p2.y, 4);
+    }
+
+    // Base position
+    float baseX = 0.0f;
+    float baseY = 0.0f;
+    float baseZ = 0.0f;
+
+    // Calculate arm link positions using FK from IK solution
+    float baseYawRad = solution.joints.baseYawDeg * DEG_TO_RAD;
+    float shoulderRad = solution.joints.shoulderDeg * DEG_TO_RAD;
+    float elbowRad = solution.joints.elbowDeg * DEG_TO_RAD;
+
+    // Shoulder joint position (rotates around base)
+    float shoulderLen = 158.0f;  // From IK config
+    float shoulderX = shoulderLen * cosf(shoulderRad) * cosf(baseYawRad);
+    float shoulderY = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
+    float shoulderZ = shoulderLen * sinf(shoulderRad);
+
+    // Elbow joint position
+    float forearmLen = 182.0f + solution.joints.elbowExtensionMm;
+    float elbowAngleAbs = shoulderRad + elbowRad - PI;  // Absolute elbow angle
+    float elbowX = shoulderX + forearmLen * cosf(elbowAngleAbs) * cosf(baseYawRad);
+    float elbowY = shoulderY + forearmLen * cosf(elbowAngleAbs) * sinf(baseYawRad);
+    float elbowZ = shoulderZ + forearmLen * sinf(elbowAngleAbs);
+
+    // End effector (wrist center)
+    float wristLen = 112.0f;  // Total wrist chain length
+    float wristX = elbowX + solution.toolDirection.x * wristLen;
+    float wristY = elbowY + solution.toolDirection.y * wristLen;
+    float wristZ = elbowZ + solution.toolDirection.z * wristLen;
+
+    // Project to 2D
+    Point2D pBase = projectIsometric(baseX, baseY, baseZ);
+    Point2D pShoulder = projectIsometric(shoulderX, shoulderY, shoulderZ);
+    Point2D pElbow = projectIsometric(elbowX, elbowY, elbowZ);
+    Point2D pWrist = projectIsometric(wristX, wristY, wristZ);
+    Point2D pTarget = projectIsometric(targetPosition.x, targetPosition.y, targetPosition.z);
+
+    // Draw arm links as cylinders for 3D effect
+    drawCylinder(canvas, pBase, pShoulder, 2);      // Upper arm
+    drawCylinder(canvas, pShoulder, pElbow, 2);     // Forearm
+    drawCylinder(canvas, pElbow, pWrist, 1);        // Wrist (thinner)
+
+    // Draw joints as filled circles
+    canvas.drawCircle(pBase.x, pBase.y, 3, true);
+    canvas.drawCircle(pShoulder.x, pShoulder.y, 3, true);
+    canvas.drawCircle(pElbow.x, pElbow.y, 3, true);
+
+    // Draw end effector (gripper)
+    canvas.drawCircle(pWrist.x, pWrist.y, 4, false);
+    if (gripperOpen) {
+        // Draw open gripper jaws
+        canvas.drawLine(pWrist.x - 3, pWrist.y - 3, pWrist.x - 5, pWrist.y - 5);
+        canvas.drawLine(pWrist.x + 3, pWrist.y - 3, pWrist.x + 5, pWrist.y - 5);
+    } else {
+        // Draw closed gripper
+        canvas.drawLine(pWrist.x, pWrist.y - 3, pWrist.x, pWrist.y - 5);
+    }
+
+    // Draw target position as crosshair with circle
+    canvas.drawLine(pTarget.x - 4, pTarget.y, pTarget.x + 4, pTarget.y);
+    canvas.drawLine(pTarget.x, pTarget.y - 4, pTarget.x, pTarget.y + 4);
+    canvas.drawCircle(pTarget.x, pTarget.y, 5, false);
+
+    // Draw mode and gripper state indicators
+    canvas.setFont(DisplayCanvas::TINY);
+    if (mechIaneMode == MechIaneMode::ArmXYZ) {
+        canvas.drawText(0, 63, "XYZ");
+    } else {
+        canvas.drawText(0, 63, "ORI");
+    }
+
+    // Draw gripper state
+    if (gripperOpen) {
+        canvas.drawText(110, 63, "OPEN");
+    } else {
+        canvas.drawText(110, 63, "CLSD");
+    }
+}
 
 

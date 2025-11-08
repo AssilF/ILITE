@@ -169,7 +169,7 @@ float InputManager::getBatteryVoltage() const {
     float voltage = (adcValue / 4095.0f) * 3.3f;
 
     // Multiply by 2 due to voltage divider with 2 equal resistors
-    voltage *= 2.0f;
+    voltage *= 2.0*1.82;
 
     return voltage;
 }

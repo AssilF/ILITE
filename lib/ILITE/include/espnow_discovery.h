@@ -29,7 +29,7 @@
 static constexpr uint8_t WIFI_CHANNEL = 6;
 static constexpr uint32_t BROADCAST_INTERVAL_MS = 1000;
 static constexpr uint32_t DEVICE_TTL_MS = 10000;
-static constexpr uint32_t LINK_TIMEOUT_MS = 5000;
+static constexpr uint32_t LINK_TIMEOUT_MS = 10000;  // 10 seconds without ANY message from robot
 
 // -----------------------------------------------------------------------------
 // Identity & packet layout

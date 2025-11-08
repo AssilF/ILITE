@@ -22,6 +22,7 @@
 #include "DisplayCanvas.h"
 #include "AudioRegistry.h"
 #include "MenuRegistry.h"
+#include "ModuleMenu.h"
 
 // Forward declarations
 class InputManager;
@@ -329,6 +330,21 @@ private:
      */
     void updateStripButtons();
 
+    /**
+     * @brief Register module menu entries into framework MenuRegistry
+     */
+    void registerModuleMenuEntries();
+
+    /**
+     * @brief Clear all module menu entries from MenuRegistry
+     */
+    void clearModuleMenuEntries();
+
+    /**
+     * @brief Recursively convert and register ModuleMenuItem tree
+     */
+    void convertModuleMenuItems(const ModuleMenuItem& parent, MenuID parentMenuId);
+
     // Core engines
     ButtonEventEngine buttonEngine_;
 
@@ -336,6 +352,11 @@ private:
     ILITEModule* currentModule_;
     bool isPaired_;
     FrameworkStatus status_;
+
+    // Module menu integration
+    ModuleMenuItem moduleMenuRoot_;
+    ModuleMenuBuilder moduleMenuBuilder_;
+    std::vector<std::string> moduleMenuIds_;
 
     // Top strip state
     StripButton selectedStripButton_;
