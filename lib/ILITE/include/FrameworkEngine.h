@@ -88,6 +88,13 @@ public:
     void update();
 
     /**
+     * @brief Update status LED based on system state
+     *
+     * Call frequently to update LED blinking patterns
+     */
+    void updateStatusLED();
+
+    /**
      * @brief Render complete frame (top strip + dashboard)
      *
      * @param canvas Display canvas to render to
@@ -373,13 +380,19 @@ private:
     // Menu edit mode state
     bool menuEditMode_;
     const MenuEntry* editingEntry_;
-    int editValue_;
+    int editValueInt_;
+    float editValueFloat_;
     uint32_t lastEncoderRotateMs_;
     uint32_t cursorBlinkTimer_;
 
     // Status
     uint8_t batteryPercent_;
     uint32_t statusAnimFrame_;
+
+    // LED status indication
+    uint32_t ledLastUpdateMs_;
+    uint8_t ledBlinkPhase_;
+    bool ledState_;
 
     // Default button callbacks (when no module loaded)
     ButtonCallback defaultButtonCallbacks_[3];
@@ -388,4 +401,5 @@ private:
     static constexpr uint8_t STRIP_HEIGHT = 10;
     static constexpr uint8_t DASHBOARD_Y = STRIP_HEIGHT;
     static constexpr uint8_t DASHBOARD_HEIGHT = 54;
+    static constexpr uint8_t LED_PIN = 2;  // Built-in LED on most ESP32 boards (GPIO2)
 };

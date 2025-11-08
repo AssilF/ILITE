@@ -195,8 +195,22 @@ void EspNowDiscovery::discover() {
 
 bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incomingData, int len) {
 
-    const Packet* packet = reinterpret_cast<const Packet*>(incomingData);
     uint32_t now = millis();
+
+    // CRITICAL: Update link activity FIRST for ANY packet from paired peer
+    // This ensures telemetry packets (which have different structure) still reset timeout
+    if (link.paired && macEqual(mac, link.peerMac)) {
+        link.lastActivityMs = now;
+    }
+
+    // Update lastSeen for ANY message from ANY known peer to prevent premature stale detection
+    int peerIndex = findPeerIndex(mac);
+    if (peerIndex >= 0) {
+        peers[peerIndex].lastSeen = now;
+    }
+
+    // Now validate protocol packet structure (may fail for telemetry packets)
+    const Packet* packet = reinterpret_cast<const Packet*>(incomingData);
     MessageType type = packet->type;
     logRx(type, mac);
 
@@ -213,17 +227,6 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
     if (packet->version != kProtocolVersion) {
         Serial.printf("[ESP-NOW] Protocol version mismatch: %d != %d\n", packet->version, kProtocolVersion);
         return false;
-    }
-
-    // Update lastSeen for ANY message from ANY known peer to prevent premature stale detection
-    int peerIndex = findPeerIndex(mac);
-    if (peerIndex >= 0) {
-        peers[peerIndex].lastSeen = now;
-    }
-
-    // Update link activity if this is from the paired peer
-    if (link.paired && macEqual(mac, link.peerMac)) {
-        link.lastActivityMs = now;
     }
 
     switch (type) {

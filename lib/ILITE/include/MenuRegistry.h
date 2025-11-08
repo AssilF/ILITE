@@ -71,6 +71,20 @@ struct MenuEntry {
 
     /// Custom draw function (advanced - overrides default rendering)
     std::function<void(int16_t x, int16_t y, int16_t w, bool focused)> customDraw;
+
+    // Editable value support
+    bool isEditableInt = false;        ///< Whether this is an editable integer
+    bool isEditableFloat = false;      ///< Whether this is an editable float
+    std::function<int()> getIntValue;  ///< Get integer value
+    std::function<void(int)> setIntValue; ///< Set integer value
+    std::function<float()> getFloatValue; ///< Get float value
+    std::function<void(float)> setFloatValue; ///< Set float value
+    int minValue = 0;                  ///< Minimum value
+    int maxValue = 100;                ///< Maximum value
+    float minValueFloat = 0.0f;        ///< Minimum float value
+    float maxValueFloat = 100.0f;      ///< Maximum float value
+    float step = 1.0f;                 ///< Fine step size
+    float coarseStep = 10.0f;          ///< Coarse step size (for fast rotation)
 };
 
 /**

@@ -73,6 +73,7 @@ ArmControlCommand armCommand{
 };
 
 MechIaneMode mechIaneMode = MechIaneMode::DriveMode;
+ArmCameraView armCameraView = ArmCameraView::TopLeftCorner;
 
 // Mech'Iane control state variables (non-static for external access)
 IKEngine::Vec3 targetPosition{200.0f, 0.0f, 150.0f};  // Target XYZ in mm
@@ -301,31 +302,84 @@ struct Point2D {
 };
 
 Point2D projectIsometric(float x, float y, float z, float scale = 0.12f) {
-    // Isometric projection from top-left corner viewpoint
-    // Uses rotation angles for better depth perception
-    const float angleX = 0.615f;  // ~35 degrees
-    const float angleZ = 0.785f;  // 45 degrees
-
-    // Apply rotation matrices
-    float cosX = cosf(angleX);
-    float sinX = sinf(angleX);
-    float cosZ = cosf(angleZ);
-    float sinZ = sinf(angleZ);
-
-    // Rotate around Z axis first (horizontal rotation)
-    float x1 = x * cosZ - y * sinZ;
-    float y1 = x * sinZ + y * cosZ;
-    float z1 = z;
-
-    // Then rotate around X axis (vertical tilt)
-    float x2 = x1;
-    float y2 = y1 * cosX - z1 * sinX;
-    float z2 = y1 * sinX + z1 * cosX;
-
-    // Project to 2D with offset to center on screen
     Point2D p;
-    p.x = static_cast<int16_t>(x2 * scale + 84);   // Offset right
-    p.y = static_cast<int16_t>(-y2 * scale + 45);  // Offset down, flip Y
+
+    switch (armCameraView) {
+        case ArmCameraView::TopLeftCorner: {
+            // Original view - top-left isometric
+            const float angleX = 0.615f;  // ~35 degrees
+            const float angleZ = 0.785f;  // 45 degrees
+
+            float cosX = cosf(angleX);
+            float sinX = sinf(angleX);
+            float cosZ = cosf(angleZ);
+            float sinZ = sinf(angleZ);
+
+            // Rotate around Z then X
+            float x1 = x * cosZ - y * sinZ;
+            float y1 = x * sinZ + y * cosZ;
+            float z1 = z;
+
+            float x2 = x1;
+            float y2 = y1 * cosX - z1 * sinX;
+
+            p.x = static_cast<int16_t>(x2 * scale + 84);
+            p.y = static_cast<int16_t>(-y2 * scale + 45);
+            break;
+        }
+
+        case ArmCameraView::ThirdPerson: {
+            // Low-height 3rd person view (behind and below)
+            // Camera positioned at (-300, -400, 50) looking at origin
+            const float camX = -300.0f;
+            const float camY = -400.0f;
+            const float camZ = 50.0f;
+
+            // Translate to camera space
+            float dx = x - camX;
+            float dy = y - camY;
+            float dz = z - camZ;
+
+            // Rotate to face camera forward (+Y in camera space)
+            const float angleY = 0.3f;  // Slight upward tilt
+            float cosY = cosf(angleY);
+            float sinY = sinf(angleY);
+
+            float y2 = dy * cosY - dz * sinY;
+            float z2 = dy * sinY + dz * cosY;
+
+            // Perspective projection
+            float depth = y2 + 600.0f;  // Prevent division by zero
+            if (depth < 10.0f) depth = 10.0f;
+
+            float perspective = 200.0f / depth;
+            p.x = static_cast<int16_t>(dx * perspective + 64);
+            p.y = static_cast<int16_t>(-z2 * perspective + 48);
+            break;
+        }
+
+        case ArmCameraView::Overhead: {
+            // Top-down view
+            p.x = static_cast<int16_t>(x * 0.15f + 64);
+            p.y = static_cast<int16_t>(y * 0.15f + 32);
+            break;
+        }
+
+        case ArmCameraView::Side: {
+            // Side view (looking from X axis)
+            p.x = static_cast<int16_t>(y * 0.12f + 64);
+            p.y = static_cast<int16_t>(-z * 0.12f + 48);
+            break;
+        }
+
+        case ArmCameraView::Front: {
+            // Front view (looking from Y axis)
+            p.x = static_cast<int16_t>(x * 0.12f + 64);
+            p.y = static_cast<int16_t>(-z * 0.12f + 48);
+            break;
+        }
+    }
+
     return p;
 }
 

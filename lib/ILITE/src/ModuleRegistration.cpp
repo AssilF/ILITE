@@ -254,48 +254,75 @@ public:
         addEasingEntry(builder, easingMenu, GillEasing::EaseInOut, "Ease In/Out");
         addEasingEntry(builder, easingMenu, GillEasing::Sine, "Sine");
 
-        // Easing rate adjustment submenu
-        ModuleMenuItem& rateMenu = builder.addSubmenu("thegill.easingrate", "Easing Rate", ICON_TUNING, &root);
-
-        builder.addAction(
-            "thegill.rate.inc",
-            "Increase (+0.5)",
-            [this]() {
-                thegillRuntime.easingRate = constrain(thegillRuntime.easingRate + 0.5f, 0.5f, 20.0f);
-                thegillCommand.easingRate = thegillRuntime.easingRate;
-                Serial.printf("[TheGill] Easing rate: %.1f\n", thegillRuntime.easingRate);
+        // Easing rate adjustment - editable value
+        builder.addEditableFloat(
+            "thegill.rate.edit",
+            "Easing Rate",
+            []() { return thegillRuntime.easingRate; },
+            [](float val) {
+                thegillRuntime.easingRate = val;
+                thegillCommand.easingRate = val;
+                Serial.printf("[TheGill] Easing rate set to: %.1f\n", val);
             },
-            ICON_UP,
-            &rateMenu);
+            0.5f,   // min value
+            20.0f,  // max value
+            0.1f,   // fine step
+            0.5f,   // coarse step
+            ICON_TUNING,
+            &root);
+
+        // Camera view submenu (for arm visualization)
+        ModuleMenuItem& cameraMenu = builder.addSubmenu("thegill.camera", "Camera View", ICON_HOME, &root);
 
         builder.addAction(
-            "thegill.rate.dec",
-            "Decrease (-0.5)",
-            [this]() {
-                thegillRuntime.easingRate = constrain(thegillRuntime.easingRate - 0.5f, 0.5f, 20.0f);
-                thegillCommand.easingRate = thegillRuntime.easingRate;
-                Serial.printf("[TheGill] Easing rate: %.1f\n", thegillRuntime.easingRate);
-            },
-            ICON_DOWN,
-            &rateMenu);
-
-        builder.addAction(
-            "thegill.rate.reset",
-            "Reset to 4.0",
-            [this]() {
-                thegillRuntime.easingRate = 4.0f;
-                thegillCommand.easingRate = 4.0f;
-                Serial.println("[TheGill] Easing rate reset to 4.0");
+            "thegill.camera.topleft",
+            "Top-Left Corner",
+            []() {
+                armCameraView = ArmCameraView::TopLeftCorner;
+                Serial.println("[TheGill] Camera: Top-Left Corner");
             },
             ICON_SETTINGS,
-            &rateMenu,
-            0,
-            nullptr,
-            [this]() {
-                static char rateStr[16];
-                snprintf(rateStr, sizeof(rateStr), "%.1f", thegillRuntime.easingRate);
-                return rateStr;
-            });
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.3rdperson",
+            "3rd Person",
+            []() {
+                armCameraView = ArmCameraView::ThirdPerson;
+                Serial.println("[TheGill] Camera: 3rd Person");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.overhead",
+            "Overhead",
+            []() {
+                armCameraView = ArmCameraView::Overhead;
+                Serial.println("[TheGill] Camera: Overhead");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.side",
+            "Side View",
+            []() {
+                armCameraView = ArmCameraView::Side;
+                Serial.println("[TheGill] Camera: Side");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.front",
+            "Front View",
+            []() {
+                armCameraView = ArmCameraView::Front;
+                Serial.println("[TheGill] Camera: Front");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
     }
 
 private:
@@ -1603,24 +1630,25 @@ static void registerModuleMenuEntries() {
         g_moduleMenuEntryIds.push_back(id);
 
         const std::string& storedId = g_moduleMenuEntryIds.back();
-        MenuRegistry::registerEntry({
-            storedId.c_str(),
-            MENU_MODULES,
-            ICON_ROBOT,
-            module->getModuleName(),
-            nullptr,
-            [module]() {
-                FrameworkEngine::getInstance().loadModule(module);
-            },
-            nullptr,
-            nullptr,
-            static_cast<int>(g_moduleMenuEntryIds.size()),
-            false,
-            false,
-            nullptr,
-            false,
-            nullptr
-        });
+        MenuEntry entry;
+        entry.id = storedId.c_str();
+        entry.parent = MENU_MODULES;
+        entry.icon = ICON_ROBOT;
+        entry.label = module->getModuleName();
+        entry.shortLabel = nullptr;
+        entry.onSelect = [module]() {
+            FrameworkEngine::getInstance().loadModule(module);
+        };
+        entry.condition = nullptr;
+        entry.getValue = nullptr;
+        entry.priority = static_cast<int>(g_moduleMenuEntryIds.size());
+        entry.isSubmenu = false;
+        entry.isToggle = false;
+        entry.getToggleState = nullptr;
+        entry.isReadOnly = false;
+        entry.customDraw = nullptr;
+        // Editable fields use struct defaults
+        MenuRegistry::registerEntry(entry);
     }
 }
 

@@ -8,6 +8,32 @@
 #include <cstring>
 #include <algorithm>
 
+// Helper to create MenuEntry with editable value defaults
+static MenuEntry makeMenuEntry(
+    MenuID id, MenuID parent, IconID icon, const char* label, const char* shortLabel,
+    std::function<void()> onSelect, std::function<bool()> condition, std::function<const char*()> getValue,
+    int priority, bool isSubmenu, bool isToggle, std::function<bool()> getToggleState,
+    bool isReadOnly, std::function<void(int16_t, int16_t, int16_t, bool)> customDraw
+) {
+    MenuEntry entry;
+    entry.id = id;
+    entry.parent = parent;
+    entry.icon = icon;
+    entry.label = label;
+    entry.shortLabel = shortLabel;
+    entry.onSelect = onSelect;
+    entry.condition = condition;
+    entry.getValue = getValue;
+    entry.priority = priority;
+    entry.isSubmenu = isSubmenu;
+    entry.isToggle = isToggle;
+    entry.getToggleState = getToggleState;
+    entry.isReadOnly = isReadOnly;
+    entry.customDraw = customDraw;
+    // Editable value fields use defaults from struct definition
+    return entry;
+}
+
 // Static storage
 std::vector<MenuEntry> MenuRegistry::entries_;
 
@@ -192,7 +218,7 @@ void MenuRegistry::initBuiltInMenus() {
     // Root Level Menus
     // ========================================================================
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_HOME,
         MENU_ROOT,
         ICON_HOME,
@@ -210,9 +236,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_MODULES,
         MENU_ROOT,
         ICON_ROBOT,
@@ -227,9 +253,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_SETTINGS,
         MENU_ROOT,
         ICON_SETTINGS,
@@ -244,9 +270,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_QUICK_ACTIONS,
         MENU_ROOT,
         ICON_PLAY,
@@ -261,9 +287,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_LOGS,
         MENU_ROOT,
         ICON_INFO,
@@ -278,9 +304,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_ABOUT,
         MENU_ROOT,
         ICON_INFO,
@@ -295,13 +321,13 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
     // ========================================================================
     // Settings Submenus
     // ========================================================================
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_DISPLAY,
         MENU_SETTINGS,
         ICON_HOME,
@@ -316,9 +342,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_AUDIO,
         MENU_SETTINGS,
         ICON_SETTINGS,
@@ -333,9 +359,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_CONTROLS,
         MENU_SETTINGS,
         ICON_JOYSTICK,
@@ -350,9 +376,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         MENU_NETWORK,
         MENU_SETTINGS,
         ICON_SIGNAL_FULL,
@@ -367,13 +393,13 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
     // ========================================================================
     // Display Settings
     // ========================================================================
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         "display.brightness",
         MENU_DISPLAY,
         ICON_SETTINGS,
@@ -388,9 +414,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         "display.contrast",
         MENU_DISPLAY,
         ICON_SETTINGS,
@@ -405,13 +431,13 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
     // ========================================================================
     // Audio Settings
     // ========================================================================
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         "audio.enable",
         MENU_AUDIO,
         ICON_SETTINGS,
@@ -426,9 +452,9 @@ void MenuRegistry::initBuiltInMenus() {
         []() { return true; },  // Placeholder state getter
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         "audio.volume",
         MENU_AUDIO,
         ICON_SETTINGS,
@@ -443,13 +469,13 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
     // ========================================================================
     // Control Settings
     // ========================================================================
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         "controls.deadzone",
         MENU_CONTROLS,
         ICON_JOYSTICK,
@@ -464,9 +490,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         "controls.sensitivity",
         MENU_CONTROLS,
         ICON_JOYSTICK,
@@ -481,9 +507,9 @@ void MenuRegistry::initBuiltInMenus() {
         nullptr,
         false,
         nullptr
-    });
+    ));
 
-    registerEntry({
+    registerEntry(makeMenuEntry(
         "controls.filtering",
         MENU_CONTROLS,
         ICON_SETTINGS,
@@ -498,7 +524,7 @@ void MenuRegistry::initBuiltInMenus() {
         []() { return true; },
         false,
         nullptr
-    });
+    ));
 
     Serial.printf("[MenuRegistry] Initialized %zu built-in menu entries\n", entries_.size());
 }

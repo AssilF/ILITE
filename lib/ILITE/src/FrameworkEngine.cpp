@@ -43,11 +43,15 @@ FrameworkEngine::FrameworkEngine()
     , menuOpen_(false)
     , menuEditMode_(false)
     , editingEntry_(nullptr)
-    , editValue_(0)
+    , editValueInt_(0)
+    , editValueFloat_(0.0f)
     , lastEncoderRotateMs_(0)
     , cursorBlinkTimer_(0)
     , batteryPercent_(100)
     , statusAnimFrame_(0)
+    , ledLastUpdateMs_(0)
+    , ledBlinkPhase_(0)
+    , ledState_(false)
     , menuSelection_(0)
     , menuScrollOffset_(0)
 {
@@ -57,6 +61,10 @@ FrameworkEngine::FrameworkEngine()
     for (int i = 0; i < 3; i++) {
         defaultButtonCallbacks_[i] = nullptr;
     }
+
+    // Initialize LED pin
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
 }
 
 // ============================================================================
@@ -325,6 +333,96 @@ void FrameworkEngine::update() {
     if (currentModule_ && isPaired_) {
         // Module update is called elsewhere at 50Hz (in main control loop)
         // This is just framework-level housekeeping
+    }
+
+    // Update status LED
+    updateStatusLED();
+}
+
+void FrameworkEngine::updateStatusLED() {
+    uint32_t now = millis();
+
+    // Determine current system status
+    FrameworkStatus status = FrameworkStatus::IDLE;
+
+    if (isPaired_) {
+        status = FrameworkStatus::PAIRED;
+    } else if (currentModule_ != nullptr) {
+        status = FrameworkStatus::SCANNING;  // Module loaded, searching for device
+    }
+
+    // LED blink patterns based on status
+    // IDLE: Off
+    // SCANNING: Fast blink (200ms on, 200ms off)
+    // PAIRING: Very fast blink (100ms on, 100ms off)
+    // PAIRED: Solid on
+    // ERROR: SOS pattern (3 short, 3 long, 3 short)
+
+    bool newLedState = ledState_;
+
+    switch (status) {
+        case FrameworkStatus::IDLE:
+            // LED off when idle
+            newLedState = false;
+            break;
+
+        case FrameworkStatus::SCANNING:
+            // Fast blink: 200ms cycle
+            if (now - ledLastUpdateMs_ >= 200) {
+                newLedState = !ledState_;
+                ledLastUpdateMs_ = now;
+            }
+            break;
+
+        case FrameworkStatus::PAIRING:
+            // Very fast blink: 100ms cycle
+            if (now - ledLastUpdateMs_ >= 100) {
+                newLedState = !ledState_;
+                ledLastUpdateMs_ = now;
+            }
+            break;
+
+        case FrameworkStatus::PAIRED: {
+            // Solid on, with subtle heartbeat
+            // Quick double pulse every 2 seconds
+            uint32_t cycleTime = now % 2000;
+            if (cycleTime < 50 || (cycleTime >= 100 && cycleTime < 150)) {
+                newLedState = false;  // Brief off pulses
+            } else {
+                newLedState = true;   // Mostly on
+            }
+            break;
+        }
+
+        case FrameworkStatus::ERROR_COMM:
+        case FrameworkStatus::ERROR_MODULE: {
+            // SOS pattern: ... --- ... (dot=100ms, dash=300ms, gap=100ms)
+            // Total cycle: 3*100 + 3*100 + 3*300 + 3*100 + 3*100 + 3*100 = 1800ms
+            uint32_t sosTime = now % 2000;
+
+            // 3 short dots
+            if (sosTime < 100 || (sosTime >= 200 && sosTime < 300) || (sosTime >= 400 && sosTime < 500)) {
+                newLedState = true;
+            }
+            // 3 long dashes
+            else if ((sosTime >= 600 && sosTime < 900) || (sosTime >= 1000 && sosTime < 1300) || (sosTime >= 1400 && sosTime < 1700)) {
+                newLedState = true;
+            }
+            // 3 short dots again
+            else if ((sosTime >= 1800 && sosTime < 1900)) {
+                newLedState = true;
+            }
+            else {
+                newLedState = false;
+            }
+            break;
+        }
+    }
+
+    // Update LED if state changed
+    if (newLedState != ledState_) {
+        ledState_ = newLedState;
+        digitalWrite(LED_PIN, ledState_ ? HIGH : LOW);
     }
 }
 
@@ -705,10 +803,29 @@ void FrameworkEngine::renderMenu(DisplayCanvas& canvas) {
 
         if (entry->isToggle && entry->getToggleState) {
             canvas.drawTextRight(canvas.getWidth() - 4, y, entry->getToggleState() ? "ON" : "OFF");
-        } else if (entry->getValue) {
-            const char* value = entry->getValue();
-            if (value != nullptr) {
-                canvas.drawTextRight(canvas.getWidth() - 4, y, value);
+        } else if (entry->getValue || (entry->isEditableInt || entry->isEditableFloat)) {
+            // Show edited value with blinking cursor if in edit mode for this entry
+            if (menuEditMode_ && editingEntry_ == entry) {
+                static char editBuffer[32];
+                if (entry->isEditableInt) {
+                    snprintf(editBuffer, sizeof(editBuffer), "%d", editValueInt_);
+                } else {
+                    snprintf(editBuffer, sizeof(editBuffer), "%.2f", editValueFloat_);
+                }
+
+                // Blinking cursor (500ms interval)
+                bool showCursor = ((millis() - cursorBlinkTimer_) % 1000) < 500;
+                if (showCursor) {
+                    strcat(editBuffer, "_");
+                }
+
+                canvas.drawTextRight(canvas.getWidth() - 4, y, editBuffer);
+            } else {
+                // Normal value display
+                const char* value = entry->getValue();
+                if (value != nullptr) {
+                    canvas.drawTextRight(canvas.getWidth() - 4, y, value);
+                }
             }
         } else if (MenuRegistry::hasChildren(entry->id) || entry->isSubmenu) {
             canvas.drawTextRight(canvas.getWidth() - 4, y, ">");
@@ -812,7 +929,24 @@ void FrameworkEngine::activateMenuSelection() {
         return;
     }
 
-    // Editable values - could implement edit mode here in future
+    // Editable values - enter edit mode
+    if (entry->isEditableInt || entry->isEditableFloat) {
+        menuEditMode_ = true;
+        editingEntry_ = entry;
+
+        // Store initial value
+        if (entry->isEditableInt) {
+            editValueInt_ = entry->getIntValue();
+        } else {
+            editValueFloat_ = entry->getFloatValue();
+        }
+
+        lastEncoderRotateMs_ = millis();
+        cursorBlinkTimer_ = millis();
+        AudioRegistry::play("edit_start");
+        return;
+    }
+
     // For now, just execute callback
     if (entry->onSelect) {
         entry->onSelect();
@@ -830,6 +964,14 @@ void FrameworkEngine::activateMenuSelection() {
 }
 
 void FrameworkEngine::menuGoBack() {
+    // Cancel edit mode if active
+    if (menuEditMode_) {
+        menuEditMode_ = false;
+        editingEntry_ = nullptr;
+        AudioRegistry::play("edit_cancel");
+        return;
+    }
+
     if (menuStack_.empty()) {
         closeMenu();
         return;
@@ -997,6 +1139,53 @@ void FrameworkEngine::onEncoderRotate(int delta) {
         return;
     }
 
+    // Handle value editing mode (highest priority)
+    if (menuOpen_ && menuEditMode_ && editingEntry_ != nullptr) {
+        uint32_t now = millis();
+        uint32_t timeSinceLastRotate = now - lastEncoderRotateMs_;
+        lastEncoderRotateMs_ = now;
+
+        // Speed-based coarse/fine adjustment
+        // Fast rotation (< 50ms between ticks) = coarse step
+        // Slow rotation (>= 50ms) = fine step
+        bool isFastRotation = (timeSinceLastRotate < 50);
+
+        if (editingEntry_->isEditableInt) {
+            // Integer value editing
+            float stepSize = isFastRotation ? editingEntry_->coarseStep : editingEntry_->step;
+            editValueInt_ += static_cast<int>(stepSize * delta);
+
+            // Clamp to min/max
+            if (editValueInt_ < editingEntry_->minValue) {
+                editValueInt_ = editingEntry_->minValue;
+            }
+            if (editValueInt_ > editingEntry_->maxValue) {
+                editValueInt_ = editingEntry_->maxValue;
+            }
+
+            AudioRegistry::play("edit_adjust");
+            Serial.printf("[Edit] Int value: %d (step: %.1f)\n", editValueInt_, stepSize);
+
+        } else if (editingEntry_->isEditableFloat) {
+            // Float value editing
+            float stepSize = isFastRotation ? editingEntry_->coarseStep : editingEntry_->step;
+            editValueFloat_ += stepSize * delta;
+
+            // Clamp to min/max
+            if (editValueFloat_ < editingEntry_->minValueFloat) {
+                editValueFloat_ = editingEntry_->minValueFloat;
+            }
+            if (editValueFloat_ > editingEntry_->maxValueFloat) {
+                editValueFloat_ = editingEntry_->maxValueFloat;
+            }
+
+            AudioRegistry::play("edit_adjust");
+            Serial.printf("[Edit] Float value: %.2f (step: %.2f)\n", editValueFloat_, stepSize);
+        }
+
+        return;
+    }
+
     if (menuOpen_) {
         navigateMenu(delta);
         return;
@@ -1033,6 +1222,24 @@ void FrameworkEngine::onEncoderRotate(int delta) {
 }
 
 void FrameworkEngine::onEncoderPress() {
+    // Handle value editing mode - save and exit
+    if (menuOpen_ && menuEditMode_ && editingEntry_ != nullptr) {
+        // Save the edited value
+        if (editingEntry_->isEditableInt && editingEntry_->setIntValue) {
+            editingEntry_->setIntValue(editValueInt_);
+            Serial.printf("[Edit] Saved int value: %d\n", editValueInt_);
+        } else if (editingEntry_->isEditableFloat && editingEntry_->setFloatValue) {
+            editingEntry_->setFloatValue(editValueFloat_);
+            Serial.printf("[Edit] Saved float value: %.2f\n", editValueFloat_);
+        }
+
+        // Exit edit mode
+        menuEditMode_ = false;
+        editingEntry_ = nullptr;
+        AudioRegistry::play("edit_save");
+        return;
+    }
+
     if (menuOpen_) {
         activateMenuSelection();
         return;
@@ -1215,6 +1422,42 @@ void FrameworkEngine::convertModuleMenuItems(const ModuleMenuItem& parent, MenuI
                 entry.isToggle = false;
                 entry.onSelect = item.onSelect;
                 entry.getValue = item.value;
+                break;
+
+            case ModuleMenuItem::Type::EditableInt:
+                entry.isSubmenu = false;
+                entry.isToggle = false;
+                entry.isEditableInt = true;
+                entry.getIntValue = item.getIntValue;
+                entry.setIntValue = item.setIntValue;
+                entry.minValue = item.minValue;
+                entry.maxValue = item.maxValue;
+                entry.step = item.step;
+                entry.coarseStep = item.coarseStep;
+                // Auto-generate getValue function to display current value
+                entry.getValue = [item]() -> const char* {
+                    static char buffer[32];
+                    snprintf(buffer, sizeof(buffer), "%d", item.getIntValue());
+                    return buffer;
+                };
+                break;
+
+            case ModuleMenuItem::Type::EditableFloat:
+                entry.isSubmenu = false;
+                entry.isToggle = false;
+                entry.isEditableFloat = true;
+                entry.getFloatValue = item.getFloatValue;
+                entry.setFloatValue = item.setFloatValue;
+                entry.minValueFloat = item.minValueFloat;
+                entry.maxValueFloat = item.maxValueFloat;
+                entry.step = item.step;
+                entry.coarseStep = item.coarseStep;
+                // Auto-generate getValue function to display current value
+                entry.getValue = [item]() -> const char* {
+                    static char buffer[32];
+                    snprintf(buffer, sizeof(buffer), "%.2f", item.getFloatValue());
+                    return buffer;
+                };
                 break;
         }
 

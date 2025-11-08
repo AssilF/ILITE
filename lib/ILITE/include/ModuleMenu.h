@@ -41,7 +41,9 @@ struct ModuleMenuItem {
         Action,     ///< Invoke callback when selected
         Toggle,     ///< Toggle state, shows checkmark
         Screen,     ///< Opens a custom screen via callback
-        Submenu     ///< Contains nested children
+        Submenu,    ///< Contains nested children
+        EditableInt,    ///< Editable integer value
+        EditableFloat   ///< Editable float value
     };
 
     std::string id;                       ///< Unique identifier within module
@@ -54,6 +56,18 @@ struct ModuleMenuItem {
     std::function<bool()> toggleState;    ///< Toggle state provider (Toggle only)
     std::function<bool()> condition;      ///< Visibility predicate (optional)
     std::function<const char*()> value;   ///< Optional value renderer
+
+    // Editable value support
+    std::function<int()> getIntValue;     ///< Get integer value (EditableInt only)
+    std::function<void(int)> setIntValue; ///< Set integer value (EditableInt only)
+    std::function<float()> getFloatValue; ///< Get float value (EditableFloat only)
+    std::function<void(float)> setFloatValue; ///< Set float value (EditableFloat only)
+    int minValue = 0;                     ///< Minimum value for editing
+    int maxValue = 100;                   ///< Maximum value for editing
+    float minValueFloat = 0.0f;           ///< Minimum float value for editing
+    float maxValueFloat = 100.0f;         ///< Maximum float value for editing
+    float step = 1.0f;                    ///< Step size for editing
+    float coarseStep = 10.0f;             ///< Coarse step size for fast editing
 
     std::vector<ModuleMenuItem> children; ///< Nested entries (Submenu only)
 };
@@ -135,6 +149,62 @@ public:
                                ModuleMenuItem* parent = nullptr,
                                int priority = 0,
                                std::function<bool()> condition = nullptr);
+
+    /**
+     * @brief Add an editable integer value entry.
+     *
+     * @param id        Unique identifier
+     * @param label     Display label
+     * @param getValue  Function to get current value
+     * @param setValue  Function to set new value
+     * @param minVal    Minimum value
+     * @param maxVal    Maximum value
+     * @param step      Fine adjustment step
+     * @param coarseStep Coarse adjustment step (for fast rotation)
+     * @param icon      Optional icon
+     * @param parent    Parent submenu (nullptr = root)
+     * @param priority  Sorting priority
+     * @return Reference to the created item
+     */
+    ModuleMenuItem& addEditableInt(const std::string& id,
+                                    const std::string& label,
+                                    std::function<int()> getValue,
+                                    std::function<void(int)> setValue,
+                                    int minVal,
+                                    int maxVal,
+                                    int step = 1,
+                                    int coarseStep = 10,
+                                    IconID icon = nullptr,
+                                    ModuleMenuItem* parent = nullptr,
+                                    int priority = 0);
+
+    /**
+     * @brief Add an editable float value entry.
+     *
+     * @param id        Unique identifier
+     * @param label     Display label
+     * @param getValue  Function to get current value
+     * @param setValue  Function to set new value
+     * @param minVal    Minimum value
+     * @param maxVal    Maximum value
+     * @param step      Fine adjustment step
+     * @param coarseStep Coarse adjustment step (for fast rotation)
+     * @param icon      Optional icon
+     * @param parent    Parent submenu (nullptr = root)
+     * @param priority  Sorting priority
+     * @return Reference to the created item
+     */
+    ModuleMenuItem& addEditableFloat(const std::string& id,
+                                      const std::string& label,
+                                      std::function<float()> getValue,
+                                      std::function<void(float)> setValue,
+                                      float minVal,
+                                      float maxVal,
+                                      float step = 0.1f,
+                                      float coarseStep = 1.0f,
+                                      IconID icon = nullptr,
+                                      ModuleMenuItem* parent = nullptr,
+                                      int priority = 0);
 
     /**
      * @brief Access the underlying root item.

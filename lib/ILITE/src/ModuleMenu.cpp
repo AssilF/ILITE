@@ -87,6 +87,58 @@ ModuleMenuItem& ModuleMenuBuilder::resolveParent(ModuleMenuItem* parent) {
     return root_;
 }
 
+ModuleMenuItem& ModuleMenuBuilder::addEditableInt(const std::string& id,
+                                                   const std::string& label,
+                                                   std::function<int()> getValue,
+                                                   std::function<void(int)> setValue,
+                                                   int minVal,
+                                                   int maxVal,
+                                                   int step,
+                                                   int coarseStep,
+                                                   IconID icon,
+                                                   ModuleMenuItem* parent,
+                                                   int priority) {
+    ModuleMenuItem item;
+    item.id = id;
+    item.label = label;
+    item.icon = icon;
+    item.type = ModuleMenuItem::Type::EditableInt;
+    item.priority = priority;
+    item.getIntValue = std::move(getValue);
+    item.setIntValue = std::move(setValue);
+    item.minValue = minVal;
+    item.maxValue = maxVal;
+    item.step = static_cast<float>(step);
+    item.coarseStep = static_cast<float>(coarseStep);
+    return appendItem(resolveParent(parent), std::move(item));
+}
+
+ModuleMenuItem& ModuleMenuBuilder::addEditableFloat(const std::string& id,
+                                                     const std::string& label,
+                                                     std::function<float()> getValue,
+                                                     std::function<void(float)> setValue,
+                                                     float minVal,
+                                                     float maxVal,
+                                                     float step,
+                                                     float coarseStep,
+                                                     IconID icon,
+                                                     ModuleMenuItem* parent,
+                                                     int priority) {
+    ModuleMenuItem item;
+    item.id = id;
+    item.label = label;
+    item.icon = icon;
+    item.type = ModuleMenuItem::Type::EditableFloat;
+    item.priority = priority;
+    item.getFloatValue = std::move(getValue);
+    item.setFloatValue = std::move(setValue);
+    item.minValueFloat = minVal;
+    item.maxValueFloat = maxVal;
+    item.step = step;
+    item.coarseStep = coarseStep;
+    return appendItem(resolveParent(parent), std::move(item));
+}
+
 ModuleMenuItem& ModuleMenuBuilder::appendItem(ModuleMenuItem& parent, ModuleMenuItem item) {
     parent.children.emplace_back(std::move(item));
 

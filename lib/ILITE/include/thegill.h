@@ -139,8 +139,18 @@ enum class MechIaneMode : uint8_t {
     ArmOrientation = 2, // Pitch/Yaw/Roll orientation control
 };
 
+// Camera views for 3D arm visualization
+enum class ArmCameraView : uint8_t {
+    TopLeftCorner = 0,  // Current view - top-left isometric
+    ThirdPerson = 1,    // Low-height behind-the-arm view
+    Overhead = 2,       // Top-down view
+    Side = 3,           // Side profile view
+    Front = 4,          // Front view
+};
+
 extern ArmControlCommand armCommand;
 extern MechIaneMode mechIaneMode;
+extern ArmCameraView armCameraView;
 
 // Expose IK state for visualization
 extern IKEngine::Vec3 targetPosition;
