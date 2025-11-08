@@ -358,65 +358,104 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
 
     if (showButtons) {
         uint8_t buttonX = 2;
-        const uint8_t buttonSpacing = 4;
-        const uint8_t buttonWidth = 18;
+        const uint8_t buttonSpacing = 3;
+        const uint8_t buttonWidth = 24;
+        const uint8_t buttonHeight = 8;
+        const uint8_t buttonY = stripY + 1;
 
         // Menu button (visible when not in menu)
         bool menuSelected = (selectedStripButton_ == StripButton::MENU);
+
+        // Draw outlined box (always)
+        canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
+
+        // Fill if selected
         if (menuSelected) {
-            canvas.drawRect(buttonX - 1, stripY + 1, buttonWidth, 7,1); // Highlight
-            canvas.setDrawColor(0); // Invert text
+            canvas.drawRect(buttonX + 1, buttonY + 1, buttonWidth - 2, buttonHeight - 2, true);
+            canvas.setDrawColor(0); // Invert text for visibility
         }
-        canvas.drawText(buttonX + 2, stripY + 7, "≡ MNU");
+
+        // Draw menu icon using u8g2 open iconic font
+        canvas.setFont(DisplayCanvas::ICON_SMALL);
+        canvas.drawText(buttonX + 8, buttonY + 7, "@");  // Menu/hamburger icon (glyph 64)
+        canvas.setFont(DisplayCanvas::TINY);  // Restore tiny font
+
         if (menuSelected) {
             canvas.setDrawColor(1); // Restore normal
         }
+
         buttonX += buttonWidth + buttonSpacing;
 
         // F1 button (only show in module dashboard if function is defined)
         if (inModuleDashboard && hasEncoderFunction_[0]) {
             bool f1Selected = (selectedStripButton_ == StripButton::FUNCTION_1);
+            bool f1Toggle = encoderFunctions_[0].isToggle;
+            bool f1Active = f1Toggle && encoderFunctions_[0].toggleState && *encoderFunctions_[0].toggleState;
+
+            // Draw outlined box
+            canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
+
+            // Fill if selected
             if (f1Selected) {
-                canvas.drawRect(buttonX - 1, stripY + 1, buttonWidth, 7,1);
-                canvas.setDrawColor(0);
+                canvas.drawRect(buttonX + 1, buttonY + 1, buttonWidth - 2, buttonHeight - 2, true);
+                canvas.setDrawColor(0); // Invert text
             }
 
-            // Show label and toggle state if applicable
-            if (encoderFunctions_[0].isToggle && encoderFunctions_[0].toggleState) {
-                bool state = *encoderFunctions_[0].toggleState;
-                canvas.drawText(buttonX + 2, stripY + 7,
-                    state ? encoderFunctions_[0].label : "·");
-            } else {
-                canvas.drawText(buttonX + 2, stripY + 7, encoderFunctions_[0].label);
+            // Draw label
+            canvas.drawText(buttonX + 3, buttonY + 6, encoderFunctions_[0].label);
+
+            // Draw toggle indicator (small square in top-right corner)
+            if (f1Toggle && f1Active) {
+                // Draw a small filled square in the corner to indicate active toggle
+                uint8_t indicatorSize = 2;
+                canvas.drawRect(buttonX + buttonWidth - indicatorSize - 1,
+                               buttonY + 1,
+                               indicatorSize,
+                               indicatorSize,
+                               true);
             }
 
             if (f1Selected) {
-                canvas.setDrawColor(1);
+                canvas.setDrawColor(1); // Restore normal
             }
+
             buttonX += buttonWidth + buttonSpacing;
         }
 
         // F2 button (only show in module dashboard if function is defined)
         if (inModuleDashboard && hasEncoderFunction_[1]) {
             bool f2Selected = (selectedStripButton_ == StripButton::FUNCTION_2);
+            bool f2Toggle = encoderFunctions_[1].isToggle;
+            bool f2Active = f2Toggle && encoderFunctions_[1].toggleState && *encoderFunctions_[1].toggleState;
+
+            // Draw outlined box
+            canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
+
+            // Fill if selected
             if (f2Selected) {
-                canvas.drawRect(buttonX - 1, stripY + 1, buttonWidth, 7,1);
-                canvas.setDrawColor(0);
+                canvas.drawRect(buttonX + 1, buttonY + 1, buttonWidth - 2, buttonHeight - 2, true);
+                canvas.setDrawColor(0); // Invert text
             }
 
-            // Show label and toggle state if applicable
-            if (encoderFunctions_[1].isToggle && encoderFunctions_[1].toggleState) {
-                bool state = *encoderFunctions_[1].toggleState;
-                canvas.drawText(buttonX + 2, stripY + 7,
-                    state ? encoderFunctions_[1].label : "·");
-            } else {
-                canvas.drawText(buttonX + 2, stripY + 7, encoderFunctions_[1].label);
+            // Draw label
+            canvas.drawText(buttonX + 3, buttonY + 6, encoderFunctions_[1].label);
+
+            // Draw toggle indicator (small square in top-right corner)
+            if (f2Toggle && f2Active) {
+                // Draw a small filled square in the corner to indicate active toggle
+                uint8_t indicatorSize = 2;
+                canvas.drawRect(buttonX + buttonWidth - indicatorSize - 1,
+                               buttonY + 1,
+                               indicatorSize,
+                               indicatorSize,
+                               true);
             }
 
             if (f2Selected) {
-                canvas.setDrawColor(1);
+                canvas.setDrawColor(1); // Restore normal
             }
-            buttonX += buttonSpacing;
+
+            buttonX += buttonWidth + buttonSpacing;
         }
 
         leftBoundary = buttonX;
@@ -455,26 +494,34 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
     char battStr[8];
     snprintf(battStr, sizeof(battStr), "%d%%", batteryPercent_);
     uint8_t battWidth = strlen(battStr) * 4;
-    canvas.drawText(128 - battWidth - 2, stripY + 7, battStr);
+    canvas.drawText(128 - battWidth - 10, stripY + 7, battStr);
 
-    // Status icon
+    // Battery icon using u8g2 open iconic font
+    canvas.setFont(DisplayCanvas::ICON_SMALL);
+    canvas.drawText(128 - battWidth - 18, stripY + 7, "J");  // Battery icon (glyph 74)
+    canvas.setFont(DisplayCanvas::TINY);
+
+    // Status icon using u8g2 open iconic font
     const char* statusIcon = " ";
+    bool useIconFont = true;
     switch (status_) {
         case FrameworkStatus::SCANNING:
-            statusIcon = (statusAnimFrame_ / 10) % 2 ? "." : "o";
+            statusIcon = (statusAnimFrame_ / 10) % 2 ? "W" : "w";  // WiFi search animation
             break;
         case FrameworkStatus::PAIRED:
-            statusIcon = "●";
+            statusIcon = "B";  // Check icon (glyph 66)
             break;
         case FrameworkStatus::ERROR_COMM:
         case FrameworkStatus::ERROR_MODULE:
-            statusIcon = "!";
+            statusIcon = "C";  // Warning icon (glyph 67)
             break;
         default:
-            statusIcon = "·";
+            statusIcon = "F";  // Circle icon (glyph 70)
             break;
     }
-    canvas.drawText(128 - battWidth - 12, stripY + 7, statusIcon);
+    canvas.setFont(DisplayCanvas::ICON_SMALL);
+    canvas.drawText(128 - battWidth - 28, stripY + 7, statusIcon);
+    canvas.setFont(DisplayCanvas::TINY);
 
     // Module name (if loaded and not in menu/screens mode)
     if (currentModule_ && !menuOpen_ && !DefaultActions::hasActiveScreen()) {

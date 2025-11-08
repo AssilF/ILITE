@@ -531,6 +531,14 @@ void ILITEFramework::handleConnectionTimeout() {
     }
 }
 
+void ILITEFramework::onTelemetryReceived(ILITEModule* module) {
+    // Update telemetry timestamp to prevent timeout
+    lastTelemetryTime_ = millis();
+
+    // Update packet count
+    packetRxCount_++;
+}
+
 // ============================================================================
 // Module Management
 // ============================================================================

@@ -446,30 +446,38 @@ private:
         // Register encoder functions when module activates
         FrameworkEngine& fw = FrameworkEngine::getInstance();
 
-        // F1: Toggle drive mode
+        // F1: Toggle XYZ/Orientation (only active in Arm mode)
         EncoderFunction f1;
-        f1.label = "MODE";
-        f1.fullName = "Toggle Mode";
+        f1.label = "CTRL";  // Control mode (XYZ vs Orientation)
+        f1.fullName = "Toggle XYZ/Orient";
         f1.callback = [this]() {
-            if (thegillConfig.mode == GillMode::Default) {
-                setMode(GillMode::Differential);
+            // Only active in arm mode
+            if (mechIaneMode != MechIaneMode::DriveMode) {
+                if (mechIaneMode == MechIaneMode::ArmXYZ) {
+                    mechIaneMode = MechIaneMode::ArmOrientation;
+                } else {
+                    mechIaneMode = MechIaneMode::ArmXYZ;
+                }
+                AudioRegistry::play("menu_select");
             } else {
-                setMode(GillMode::Default);
+                // In drive mode, F1 does nothing (could add feedback sound)
+                AudioRegistry::play("error");
             }
-            AudioRegistry::play("menu_select");
         };
         f1.isToggle = false;
         f1.toggleState = nullptr;
         fw.setEncoderFunction(0, f1);
 
-        // F2: Cycle easing
+        // F2: Toggle ARM/DRIVE modes
         EncoderFunction f2;
-        f2.label = "EASE";
-        f2.fullName = "Cycle Easing";
+        f2.label = "MODE";  // Mode switch (Arm vs Drive)
+        f2.fullName = "Toggle Arm/Drive";
         f2.callback = [this]() {
-            int currentEasing = static_cast<int>(thegillConfig.easing);
-            currentEasing = (currentEasing + 1) % 6; // 6 easing modes
-            setEasing(static_cast<GillEasing>(currentEasing));
+            if (mechIaneMode == MechIaneMode::DriveMode) {
+                mechIaneMode = MechIaneMode::ArmXYZ;
+            } else {
+                mechIaneMode = MechIaneMode::DriveMode;
+            }
             AudioRegistry::play("menu_select");
         };
         f2.isToggle = false;
