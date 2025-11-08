@@ -370,6 +370,13 @@ private:
     int menuSelection_;
     int menuScrollOffset_;
 
+    // Menu edit mode state
+    bool menuEditMode_;
+    const MenuEntry* editingEntry_;
+    int editValue_;
+    uint32_t lastEncoderRotateMs_;
+    uint32_t cursorBlinkTimer_;
+
     // Status
     uint8_t batteryPercent_;
     uint32_t statusAnimFrame_;

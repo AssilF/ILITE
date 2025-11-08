@@ -41,6 +41,11 @@ FrameworkEngine::FrameworkEngine()
     , selectedStripButton_(StripButton::MENU)
     , stripButtonCount_(1) // Always have MENU button
     , menuOpen_(false)
+    , menuEditMode_(false)
+    , editingEntry_(nullptr)
+    , editValue_(0)
+    , lastEncoderRotateMs_(0)
+    , cursorBlinkTimer_(0)
     , batteryPercent_(100)
     , statusAnimFrame_(0)
     , menuSelection_(0)
@@ -375,10 +380,9 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             canvas.setDrawColor(0); // Invert text for visibility
         }
 
-        // Draw menu icon using u8g2 open iconic font (0x40 = '@' in ASCII = menu icon)
-        canvas.setFont(DisplayCanvas::ICON_SMALL);
-        canvas.drawText(buttonX + 5, buttonY + 7, "\u0040");  // Menu icon: character 64
-        canvas.setFont(DisplayCanvas::TINY);  // Restore tiny font
+        // Draw MENU text
+        canvas.setFont(DisplayCanvas::TINY);
+        canvas.drawText(buttonX + 2, buttonY + 6, "MENU");
 
         if (menuSelected) {
             canvas.setDrawColor(1); // Restore normal
@@ -490,16 +494,31 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
     // Right side: Module name, battery, status
     canvas.setFont(DisplayCanvas::TINY);
 
-    // Battery icon and percentage (rightmost)
+    // Battery bar (rightmost) - 16px wide, 7px tall
+    const uint8_t battBarWidth = 16;
+    const uint8_t battBarHeight = 7;
+    const uint8_t battBarX = 128 - battBarWidth - 2;
+    const uint8_t battBarY = stripY + 1;
+
+    // Draw battery outline
+    canvas.drawRect(battBarX, battBarY, battBarWidth, battBarHeight, false);
+
+    // Draw battery terminal (small nub on right)
+    canvas.drawRect(battBarX + battBarWidth, battBarY + 2, 1, 3, true);
+
+    // Fill battery based on percentage
+    uint8_t fillWidth = ((battBarWidth - 3) * batteryPercent_) / 100;
+    if (fillWidth > 0) {
+        canvas.drawRect(battBarX + 1, battBarY + 1, fillWidth, battBarHeight - 2, true);
+    }
+
+    // Draw percentage text in XOR mode (inverted where overlapping fill)
     char battStr[8];
     snprintf(battStr, sizeof(battStr), "%d%%", batteryPercent_);
-    uint8_t battWidth = strlen(battStr) * 4;
-    canvas.drawText(128 - battWidth - 2, stripY + 7, battStr);
-
-    // Battery icon using u8g2 open iconic font
-    canvas.setFont(DisplayCanvas::ICON_SMALL);
-    canvas.drawText(128 - battWidth - 10, stripY + 7, "\u004a");  // Battery icon: char 74 (J)
-    canvas.setFont(DisplayCanvas::TINY);
+    uint8_t textWidth = strlen(battStr) * 4;
+    canvas.setDrawColor(2); // XOR mode
+    canvas.drawText(battBarX + (battBarWidth - textWidth) / 2, battBarY + 6, battStr);
+    canvas.setDrawColor(1); // Restore normal mode
 
     // Status icon using u8g2 open iconic font
     const char* statusIcon = " ";
@@ -520,14 +539,14 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             break;
     }
     canvas.setFont(DisplayCanvas::ICON_SMALL);
-    canvas.drawText(128 - battWidth - 20, stripY + 7, statusIcon);
+    canvas.drawText(battBarX - 10, stripY + 7, statusIcon);
     canvas.setFont(DisplayCanvas::TINY);
 
     // Module name (if loaded and not in menu/screens mode)
     if (currentModule_ && !menuOpen_ && !DefaultActions::hasActiveScreen()) {
         const char* moduleName = currentModule_->getModuleName();
         uint8_t nameWidth = strlen(moduleName) * 4;
-        uint8_t maxNameX = 128 - battWidth - 20;
+        uint8_t maxNameX = battBarX - 12;  // Position before status icon
 
         // Truncate if too long
         if (nameWidth > (maxNameX - leftBoundary)) {
@@ -567,21 +586,23 @@ void FrameworkEngine::renderDashboard(DisplayCanvas& canvas) {
 }
 
 void FrameworkEngine::renderGenericDashboard(DisplayCanvas& canvas) {
-    // Generic dashboard showing framework status
+    // Generic dashboard showing framework status (centered text)
 
+    // Title - centered
     canvas.setFont(DisplayCanvas::NORMAL);
+    const char* title = "ILITE v2.0";
+    int16_t titleWidth = canvas.getTextWidth(title);
+    canvas.drawText((128 - titleWidth) / 2, DASHBOARD_Y + 12, title);
 
-    // Title
-    canvas.drawText(32, DASHBOARD_Y + 12, "ILITE v2.0");
-
-    // Module count
+    // Module count - centered
     size_t moduleCount = ModuleRegistry::getModuleCount();
     char countStr[32];
     snprintf(countStr, sizeof(countStr), "Modules: %d", moduleCount);
     canvas.setFont(DisplayCanvas::SMALL);
-    canvas.drawText(20, DASHBOARD_Y + 26, countStr);
+    int16_t countWidth = canvas.getTextWidth(countStr);
+    canvas.drawText((128 - countWidth) / 2, DASHBOARD_Y + 26, countStr);
 
-    // Status
+    // Status - centered
     const char* statusStr = "";
     switch (status_) {
         case FrameworkStatus::IDLE:
@@ -612,11 +633,14 @@ void FrameworkEngine::renderGenericDashboard(DisplayCanvas& canvas) {
             statusStr = "ERROR: Module Fail";
             break;
     }
-    canvas.drawText(10, DASHBOARD_Y + 38, statusStr);
+    int16_t statusWidth = canvas.getTextWidth(statusStr);
+    canvas.drawText((128 - statusWidth) / 2, DASHBOARD_Y + 38, statusStr);
 
-    // Help text
+    // Help text - centered
     canvas.setFont(DisplayCanvas::TINY);
-    canvas.drawText(8, DASHBOARD_Y + 50, "Press encoder for menu");
+    const char* helpText = "Press encoder for menu";
+    int16_t helpWidth = canvas.getTextWidth(helpText);
+    canvas.drawText((128 - helpWidth) / 2, DASHBOARD_Y + 50, helpText);
 }
 
 // ============================================================================
