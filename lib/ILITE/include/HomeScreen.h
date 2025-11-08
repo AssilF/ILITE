@@ -96,4 +96,5 @@ private:
     static uint32_t lastUpdate_;
     static int deviceListIndex_;
     static int selectedDeviceIndex_;
+    static int selectedButtonIndex_;
 };

@@ -18,6 +18,7 @@ DisplayMode HomeScreen::previousMode_ = DisplayMode::HOME;
 uint32_t HomeScreen::lastUpdate_ = 0;
 int HomeScreen::deviceListIndex_ = 0;
 int HomeScreen::selectedDeviceIndex_ = -1;
+int HomeScreen::selectedButtonIndex_ = 0;  // 0 = Pair, 1 = Cancel
 
 // Menu system
 static int menuIndex = 0;
@@ -120,13 +121,15 @@ void HomeScreen::onEncoderButton() {
         case DisplayMode::DEVICE_LIST:
             // Select device from list
             selectedDeviceIndex_ = deviceListIndex_;
+            selectedButtonIndex_ = 0;  // Reset to Pair button
             previousMode_ = DisplayMode::DEVICE_LIST;
             currentMode_ = DisplayMode::DEVICE_PROPERTIES;
             break;
 
         case DisplayMode::DEVICE_PROPERTIES:
-            // Pair with selected device
-            {
+            // Handle button press based on selected button
+            if (selectedButtonIndex_ == 0) {
+                // Pair button pressed
                 auto& discovery = ILITEFramework::getInstance().getDiscovery();
                 if (selectedDeviceIndex_ >= 0 && selectedDeviceIndex_ < discovery.getPeerCount()) {
                     const uint8_t* mac = discovery.getPeer(selectedDeviceIndex_);
@@ -136,6 +139,10 @@ void HomeScreen::onEncoderButton() {
                         currentMode_ = DisplayMode::HOME;
                     }
                 }
+            } else {
+                // Cancel button pressed
+                Serial.println("[HomeScreen] Pairing cancelled");
+                currentMode_ = DisplayMode::DEVICE_LIST;
             }
             break;
 
@@ -166,6 +173,13 @@ void HomeScreen::onEncoderRotate(int delta) {
                 if (deviceListIndex_ < 0) deviceListIndex_ = 0;
                 if (deviceListIndex_ >= peerCount) deviceListIndex_ = peerCount - 1;
             }
+            break;
+
+        case DisplayMode::DEVICE_PROPERTIES:
+            // Navigate between Pair and Cancel buttons
+            selectedButtonIndex_ += delta;
+            if (selectedButtonIndex_ < 0) selectedButtonIndex_ = 0;
+            if (selectedButtonIndex_ > 1) selectedButtonIndex_ = 1;
             break;
 
         case DisplayMode::TERMINAL:
@@ -426,35 +440,64 @@ void HomeScreen::drawDeviceProperties(DisplayCanvas& canvas) {
         return;
     }
 
-    const Identity* identity = nullptr;
     const uint8_t* mac = discovery.getPeer(selectedDeviceIndex_);
+    const char* name = discovery.getPeerName(selectedDeviceIndex_);
 
-    // Get identity from peer entry
-    int peerIdx = discovery.findPeerIndex(mac);
-    if (peerIdx >= 0) {
-        // We need to access the peer entry - for now, show basic info
-        canvas.setFont(DisplayCanvas::TINY);
+    // Device information section
+    canvas.setFont(DisplayCanvas::TINY);
 
-        char buffer[32];
+    // Device name
+    canvas.drawText(2, 18, "Name:");
+    canvas.setFont(DisplayCanvas::SMALL);
+    canvas.drawText(2, 26, name != nullptr ? name : "Unknown");
 
-        // Device name
-        const char* name = discovery.getPeerName(selectedDeviceIndex_);
-        canvas.drawText(2, 20, "Name:");
-        canvas.drawText(2, 28, name != nullptr ? name : "Unknown");
-
-        // MAC address
-        canvas.drawText(2, 38, "MAC:");
+    // MAC address
+    canvas.setFont(DisplayCanvas::TINY);
+    canvas.drawText(2, 36, "MAC Address:");
+    if (mac != nullptr) {
         char macStr[18];
-        if (mac != nullptr) {
-            snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-            canvas.drawText(2, 46, macStr);
-        }
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        canvas.drawText(2, 44, macStr);
     }
 
-    // Bottom help
-    canvas.drawHLine(0, 56, 128);
-    canvas.setFont(DisplayCanvas::TINY);
-    canvas.drawText(2, 63, "PAIR");
-    canvas.drawText(100, 63, "BACK");
+    // Buttons at the bottom
+    const int buttonY = 54;
+    const int buttonWidth = 60;
+    const int buttonHeight = 10;
+    const int buttonSpacing = 4;
+
+    // Pair button
+    int pairButtonX = 2;
+    bool pairSelected = (selectedButtonIndex_ == 0);
+
+    if (pairSelected) {
+        canvas.drawRect(pairButtonX, buttonY - 8, buttonWidth, buttonHeight, true);
+        canvas.setDrawColor(0);
+    } else {
+        canvas.drawRect(pairButtonX, buttonY - 8, buttonWidth, buttonHeight, false);
+    }
+    canvas.setFont(DisplayCanvas::SMALL);
+    canvas.drawText(pairButtonX + 18, buttonY, "PAIR");
+
+    if (pairSelected) {
+        canvas.setDrawColor(1);
+    }
+
+    // Cancel button
+    int cancelButtonX = pairButtonX + buttonWidth + buttonSpacing;
+    bool cancelSelected = (selectedButtonIndex_ == 1);
+
+    if (cancelSelected) {
+        canvas.drawRect(cancelButtonX, buttonY - 8, buttonWidth, buttonHeight, true);
+        canvas.setDrawColor(0);
+    } else {
+        canvas.drawRect(cancelButtonX, buttonY - 8, buttonWidth, buttonHeight, false);
+    }
+    canvas.setFont(DisplayCanvas::SMALL);
+    canvas.drawText(cancelButtonX + 12, buttonY, "CANCEL");
+
+    if (cancelSelected) {
+        canvas.setDrawColor(1);
+    }
 }

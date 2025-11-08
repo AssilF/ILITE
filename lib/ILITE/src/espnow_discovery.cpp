@@ -23,6 +23,8 @@ const char* messageTypeToString(MessageType type) {
             return "MSG_PAIR_CONFIRM";
         case MessageType::MSG_PAIR_ACK:
             return "MSG_PAIR_ACK";
+        case MessageType::MSG_KEEPALIVE:
+            return "MSG_KEEPALIVE";
         case MessageType::MSG_COMMAND:
             return "MSG_COMMAND";
         default:
@@ -162,6 +164,12 @@ void EspNowDiscovery::discover() {
             }
         }
     } else if (link.paired) {
+        // Send keepalive to maintain connection
+        if (now - link.lastKeepaliveMs >= KEEPALIVE_INTERVAL_MS) {
+            sendPacket(MessageType::MSG_KEEPALIVE, link.peerMac);
+            link.lastKeepaliveMs = now;
+        }
+
         if (now - link.lastActivityMs > LINK_TIMEOUT_MS) {
             Serial.println("[ESP-NOW] Link timeout, resetting");
             resetLink();
@@ -170,6 +178,12 @@ void EspNowDiscovery::discover() {
     }
 #else
     if (link.paired) {
+        // Send keepalive to maintain connection
+        if (now - link.lastKeepaliveMs >= KEEPALIVE_INTERVAL_MS) {
+            sendPacket(MessageType::MSG_KEEPALIVE, link.peerMac);
+            link.lastKeepaliveMs = now;
+        }
+
         if (now - link.lastActivityMs > LINK_TIMEOUT_MS) {
             Serial.println("[ESP-NOW] Controller timeout, resetting link");
             resetLink();
@@ -201,12 +215,15 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
         return false;
     }
 
+    // Update lastSeen for ANY message from ANY known peer to prevent premature stale detection
+    int peerIndex = findPeerIndex(mac);
+    if (peerIndex >= 0) {
+        peers[peerIndex].lastSeen = now;
+    }
+
+    // Update link activity if this is from the paired peer
     if (link.paired && macEqual(mac, link.peerMac)) {
         link.lastActivityMs = now;
-        int index = findPeerIndex(mac);
-        if (index >= 0) {
-            peers[index].lastSeen = now;
-        }
     }
 
     switch (type) {
@@ -294,6 +311,10 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
 #else
             return false;
 #endif
+
+        case MessageType::MSG_KEEPALIVE:
+            // Keepalive message - just acknowledge receipt (lastSeen already updated above)
+            return true;
 
         case MessageType::MSG_COMMAND:
             if (len >= static_cast<int>(sizeof(CommandPacket))) {

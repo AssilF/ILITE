@@ -28,8 +28,9 @@
 // ESP-NOW discovery and pairing parameters.
 static constexpr uint8_t WIFI_CHANNEL = 6;
 static constexpr uint32_t BROADCAST_INTERVAL_MS = 1000;
-static constexpr uint32_t DEVICE_TTL_MS = 10000;
-static constexpr uint32_t LINK_TIMEOUT_MS = 10000;  // 10 seconds without ANY message from robot
+static constexpr uint32_t DEVICE_TTL_MS = 30000;  // 30 seconds - increased to prevent premature peer removal
+static constexpr uint32_t LINK_TIMEOUT_MS = 30000;  // 30 seconds without ANY message from robot
+static constexpr uint32_t KEEPALIVE_INTERVAL_MS = 5000;  // Send keepalive every 5 seconds when paired
 
 // -----------------------------------------------------------------------------
 // Identity & packet layout
@@ -48,6 +49,7 @@ enum class MessageType : uint8_t {
     MSG_IDENTITY_REPLY = 0x02,
     MSG_PAIR_CONFIRM = 0x03,
     MSG_PAIR_ACK = 0x04,
+    MSG_KEEPALIVE = 0x05,
     MSG_COMMAND = 0x06,
 };
 
@@ -113,6 +115,7 @@ private:
         uint8_t peerMac[6] = {};
         uint32_t lastActivityMs = 0;
         uint32_t lastConfirmSentMs = 0;
+        uint32_t lastKeepaliveMs = 0;
         bool awaitingAck = false;
     };
 
