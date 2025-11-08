@@ -88,6 +88,8 @@ public:
     const Identity* getPairedIdentity() const;
     void setDiscoveryEnabled(bool enabled);
     bool isDiscoveryEnabled() const;
+    void setContinuousScanning(bool enabled);
+    bool isContinuousScanning() const;
     bool beginPairingWith(const uint8_t* mac);
     void setCommandCallback(void (*callback)(const char* message));
 
@@ -132,6 +134,7 @@ private:
     LinkState link{};
     uint32_t lastBroadcastMs = 0;
     bool discoveryEnabled = true;
+    bool continuousScanning = false;  // Keep scanning even when paired
     void (*commandCallback)(const char* message) = nullptr;
 };
 

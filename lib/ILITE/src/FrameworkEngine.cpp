@@ -352,15 +352,16 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
     uint8_t leftBoundary = 2;
 
     // Left side: Show strip buttons based on context
-    // Only show encoder functions (F1, F2) when in module dashboard
+    // Only show buttons when NOT in menu or screens
     bool inModuleDashboard = currentModule_ && !menuOpen_ && !DefaultActions::hasActiveScreen();
+    bool showButtons = !menuOpen_ && !DefaultActions::hasActiveScreen();
 
-    {
+    if (showButtons) {
         uint8_t buttonX = 2;
         const uint8_t buttonSpacing = 4;
         const uint8_t buttonWidth = 18;
 
-        // Menu button (always visible)
+        // Menu button (visible when not in menu)
         bool menuSelected = (selectedStripButton_ == StripButton::MENU);
         if (menuSelected) {
             canvas.drawRect(buttonX - 1, stripY + 1, buttonWidth, 7,1); // Highlight

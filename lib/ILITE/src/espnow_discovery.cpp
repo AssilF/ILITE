@@ -138,7 +138,8 @@ void EspNowDiscovery::discover() {
 #if DEVICE_ROLE == DEVICE_ROLE_CONTROLLER
     // Note: Old display mode system removed - now using discoveryEnabled flag
     bool allowBroadcast = discoveryEnabled;
-    bool shouldBroadcast = allowBroadcast && !link.paired;
+    // Only broadcast if not paired, OR if continuous scanning is enabled
+    bool shouldBroadcast = allowBroadcast && (!link.paired || continuousScanning);
 
     if (shouldBroadcast && now - lastBroadcastMs >= BROADCAST_INTERVAL_MS) {
         char mac[24];
@@ -281,7 +282,10 @@ bool EspNowDiscovery::handleIncoming(const uint8_t* mac, const uint8_t* incoming
                     peers[index].lastSeen = now;
                     peerCount = computePeerCount();
                 }
-                discoveryEnabled = false;
+                // Only disable discovery if continuous scanning is not enabled
+                if (!continuousScanning) {
+                    discoveryEnabled = false;
+                }
                 audioFeedback(AudioCue::PeerAcknowledge);
                 connectionLogAddf("Pair ack from %s", ackLabel);
                 return true;
@@ -594,6 +598,15 @@ void EspNowDiscovery::setDiscoveryEnabled(bool enabled) {
 
 bool EspNowDiscovery::isDiscoveryEnabled() const {
     return discoveryEnabled;
+}
+
+void EspNowDiscovery::setContinuousScanning(bool enabled) {
+    continuousScanning = enabled;
+    Serial.printf("[ESP-NOW] Continuous scanning %s\n", enabled ? "enabled" : "disabled");
+}
+
+bool EspNowDiscovery::isContinuousScanning() const {
+    return continuousScanning;
 }
 
 void EspNowDiscovery::setCommandCallback(void (*callback)(const char* message)) {
