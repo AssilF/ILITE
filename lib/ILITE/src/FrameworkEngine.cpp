@@ -358,8 +358,8 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
 
     if (showButtons) {
         uint8_t buttonX = 2;
-        const uint8_t buttonSpacing = 3;
-        const uint8_t buttonWidth = 24;
+        const uint8_t buttonSpacing = 0;  // No spacing between buttons
+        const uint8_t buttonWidth = 18;   // Compact buttons
         const uint8_t buttonHeight = 8;
         const uint8_t buttonY = stripY + 1;
 
@@ -375,9 +375,9 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             canvas.setDrawColor(0); // Invert text for visibility
         }
 
-        // Draw menu icon using u8g2 open iconic font
+        // Draw menu icon using u8g2 open iconic font (0x40 = '@' in ASCII = menu icon)
         canvas.setFont(DisplayCanvas::ICON_SMALL);
-        canvas.drawText(buttonX + 8, buttonY + 7, "@");  // Menu/hamburger icon (glyph 64)
+        canvas.drawText(buttonX + 5, buttonY + 7, "\u0040");  // Menu icon: character 64
         canvas.setFont(DisplayCanvas::TINY);  // Restore tiny font
 
         if (menuSelected) {
@@ -494,33 +494,33 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
     char battStr[8];
     snprintf(battStr, sizeof(battStr), "%d%%", batteryPercent_);
     uint8_t battWidth = strlen(battStr) * 4;
-    canvas.drawText(128 - battWidth - 10, stripY + 7, battStr);
+    canvas.drawText(128 - battWidth - 2, stripY + 7, battStr);
 
     // Battery icon using u8g2 open iconic font
     canvas.setFont(DisplayCanvas::ICON_SMALL);
-    canvas.drawText(128 - battWidth - 18, stripY + 7, "J");  // Battery icon (glyph 74)
+    canvas.drawText(128 - battWidth - 10, stripY + 7, "\u004a");  // Battery icon: char 74 (J)
     canvas.setFont(DisplayCanvas::TINY);
 
     // Status icon using u8g2 open iconic font
     const char* statusIcon = " ";
-    bool useIconFont = true;
     switch (status_) {
         case FrameworkStatus::SCANNING:
-            statusIcon = (statusAnimFrame_ / 10) % 2 ? "W" : "w";  // WiFi search animation
+            // Animated WiFi search (alternating chars)
+            statusIcon = (statusAnimFrame_ / 10) % 2 ? "\u0057" : "\u0077";  // chars 87/119
             break;
         case FrameworkStatus::PAIRED:
-            statusIcon = "B";  // Check icon (glyph 66)
+            statusIcon = "\u0073";  // Check icon: char 115 (known working)
             break;
         case FrameworkStatus::ERROR_COMM:
         case FrameworkStatus::ERROR_MODULE:
-            statusIcon = "C";  // Warning icon (glyph 67)
+            statusIcon = "\u0078";  // Warning/X icon: char 120
             break;
         default:
-            statusIcon = "F";  // Circle icon (glyph 70)
+            statusIcon = "\u0046";  // Circle/dot icon: char 70 (F)
             break;
     }
     canvas.setFont(DisplayCanvas::ICON_SMALL);
-    canvas.drawText(128 - battWidth - 28, stripY + 7, statusIcon);
+    canvas.drawText(128 - battWidth - 20, stripY + 7, statusIcon);
     canvas.setFont(DisplayCanvas::TINY);
 
     // Module name (if loaded and not in menu/screens mode)
