@@ -370,28 +370,31 @@ void ILITEFramework::commTask(void* parameter) {
         // Get active module
         ILITEModule* module = framework->activeModule_;
 
-        if (module != nullptr && framework->paired_) {
+        // Update control scheme when module is loaded (even if not paired)
+        if (module != nullptr) {
             // Read inputs
             InputManager& inputs = InputManager::getInstance();
             inputs.update();
 
-            // Call module's control loop
+            // Call module's control loop (runs regardless of pairing for testing)
             module->updateControl(inputs, dt);
 
-            // Prepare and send command packets
-            size_t packetTypeCount = module->getCommandPacketTypeCount();
-            for (size_t i = 0; i < packetTypeCount; ++i) {
-                PacketDescriptor desc = module->getCommandPacketDescriptor(i);
+            // Only send command packets if paired
+            if (framework->paired_) {
+                size_t packetTypeCount = module->getCommandPacketTypeCount();
+                for (size_t i = 0; i < packetTypeCount; ++i) {
+                    PacketDescriptor desc = module->getCommandPacketDescriptor(i);
 
-                uint8_t buffer[256];  // Max ESP-NOW packet size = 250
-                size_t packetSize = module->prepareCommandPacket(i, buffer, sizeof(buffer));
+                    uint8_t buffer[256];  // Max ESP-NOW packet size = 250
+                    size_t packetSize = module->prepareCommandPacket(i, buffer, sizeof(buffer));
 
-                if (packetSize > 0 && packetSize <= desc.maxSize) {
-                    // Send via ESP-NOW
-                    const uint8_t* peerMac = framework->discovery_->getPairedMac();
-                    if (peerMac != nullptr) {
-                        esp_now_send(peerMac, buffer, packetSize);
-                        framework->packetTxCount_++;
+                    if (packetSize > 0 && packetSize <= desc.maxSize) {
+                        // Send via ESP-NOW
+                        const uint8_t* peerMac = framework->discovery_->getPairedMac();
+                        if (peerMac != nullptr) {
+                            esp_now_send(peerMac, buffer, packetSize);
+                            framework->packetTxCount_++;
+                        }
                     }
                 }
             }

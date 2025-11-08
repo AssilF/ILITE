@@ -232,6 +232,32 @@ void FrameworkEngine::registerDefaultMenuEntries() {
     espnow.customDraw = nullptr;
     MenuRegistry::registerEntry(espnow);
 
+    // Deactivate Module entry (under Modules submenu)
+    MenuEntry deactivateModule;
+    deactivateModule.id = "framework.modules.deactivate";
+    deactivateModule.parent = MENU_MODULES;
+    deactivateModule.icon = ICON_STOP;
+    deactivateModule.label = "Deactivate Module";
+    deactivateModule.shortLabel = nullptr;
+    deactivateModule.onSelect = [this]() {
+        if (currentModule_) {
+            Serial.println("[FrameworkEngine] Deactivating current module");
+            loadModule(nullptr);  // Unload current module
+            AudioRegistry::play("unpaired");
+        }
+    };
+    deactivateModule.condition = [this]() {
+        return currentModule_ != nullptr;  // Only show if module is loaded
+    };
+    deactivateModule.getValue = nullptr;
+    deactivateModule.priority = 0;  // Show at top of Modules submenu
+    deactivateModule.isSubmenu = false;
+    deactivateModule.isToggle = false;
+    deactivateModule.getToggleState = nullptr;
+    deactivateModule.isReadOnly = false;
+    deactivateModule.customDraw = nullptr;
+    MenuRegistry::registerEntry(deactivateModule);
+
     Serial.println("[FrameworkEngine] Default menu entries registered");
 }
 
@@ -398,8 +424,20 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
     // Show context label when menu/screen is open
     if (menuOpen_) {
         canvas.setFont(DisplayCanvas::SMALL);
-        canvas.drawText(leftBoundary + 4, stripY + 8, "MENU");
-        leftBoundary += 30;
+        // Show current menu page title if in submenu, otherwise just "MENU"
+        if (!menuStack_.empty()) {
+            const MenuEntry* currentEntry = MenuRegistry::findEntry(menuStack_.back());
+            if (currentEntry && currentEntry->label) {
+                canvas.drawText(leftBoundary + 4, stripY + 8, currentEntry->label);
+                leftBoundary += strlen(currentEntry->label) * 5 + 8;
+            } else {
+                canvas.drawText(leftBoundary + 4, stripY + 8, "MENU");
+                leftBoundary += 30;
+            }
+        } else {
+            canvas.drawText(leftBoundary + 4, stripY + 8, "MENU");
+            leftBoundary += 30;
+        }
     } else if (DefaultActions::hasActiveScreen()) {
         canvas.setFont(DisplayCanvas::SMALL);
         const char* title = DefaultActions::getActiveScreenTitle();
@@ -668,26 +706,54 @@ void FrameworkEngine::activateMenuSelection() {
         return;
     }
 
-    bool handled = false;
+    // Handle different entry types
+    bool shouldCloseMenu = false;
 
-    if (entry->onSelect) {
-        entry->onSelect();
-        handled = true;
-    }
-
-    if (ScreenRegistry::hasScreen(entry->id) && ScreenRegistry::show(entry->id)) {
-        AudioRegistry::play("paired");
-        closeMenu();
-        handled = true;
+    // Submenus - navigate into them
+    if (MenuRegistry::hasChildren(entry->id) || entry->isSubmenu) {
+        menuStack_.push_back(entry->id);
+        menuSelection_ = 0;
+        AudioRegistry::play("menu_select");
         return;
     }
 
-    if (handled) {
+    // Screens - open and close menu
+    if (ScreenRegistry::hasScreen(entry->id) && ScreenRegistry::show(entry->id)) {
         AudioRegistry::play("paired");
-        // Close menu after activating an entry
         closeMenu();
-    } else {
-        AudioRegistry::play("menu_select");
+        return;
+    }
+
+    // Toggles - toggle and stay in menu
+    if (entry->isToggle) {
+        if (entry->onSelect) {
+            entry->onSelect();
+            AudioRegistry::play("toggle");  // Different sound for toggles
+        }
+        // Don't close menu for toggles
+        return;
+    }
+
+    // Read-only entries - do nothing
+    if (entry->isReadOnly) {
+        AudioRegistry::play("error");
+        return;
+    }
+
+    // Editable values - could implement edit mode here in future
+    // For now, just execute callback
+    if (entry->onSelect) {
+        entry->onSelect();
+        AudioRegistry::play("paired");
+
+        // Close menu for action entries, but not for value entries
+        if (!entry->getValue) {
+            shouldCloseMenu = true;
+        }
+    }
+
+    if (shouldCloseMenu) {
+        closeMenu();
     }
 }
 
@@ -1015,12 +1081,14 @@ void FrameworkEngine::registerModuleMenuEntries() {
 }
 
 void FrameworkEngine::clearModuleMenuEntries() {
-    // Unregister all module menu entries from MenuRegistry
+    // Remove all module menu entries from MenuRegistry
     for (const std::string& id : moduleMenuIds_) {
-        // MenuRegistry doesn't have a remove method, so we'll just clear our tracking
-        // The entries will remain but won't be active when module is unloaded
-        Serial.printf("[FrameworkEngine] Clearing module menu entry: %s\n", id.c_str());
+        MenuRegistry::removeEntry(id.c_str());
     }
+
+    Serial.printf("[FrameworkEngine] Cleared %d module menu entries\n",
+                  moduleMenuIds_.size());
+
     moduleMenuIds_.clear();
     moduleMenuBuilder_.clear();
     moduleMenuRoot_.children.clear();

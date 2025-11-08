@@ -112,6 +112,64 @@ void MenuRegistry::clear() {
     entries_.clear();
 }
 
+bool MenuRegistry::removeEntry(MenuID id) {
+    if (id == nullptr) {
+        return false;
+    }
+
+    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+        if (strcmp(it->id, id) == 0) {
+            Serial.printf("[MenuRegistry] Removed entry: %s\n", id);
+            entries_.erase(it);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int MenuRegistry::removeEntriesByParent(MenuID parentId) {
+    int removed = 0;
+
+    // Iterate backwards to safely erase while iterating
+    for (auto it = entries_.begin(); it != entries_.end(); ) {
+        bool shouldRemove = false;
+
+        // Check if parent matches
+        if (parentId == nullptr && it->parent == nullptr) {
+            shouldRemove = true;
+        } else if (parentId != nullptr && it->parent != nullptr &&
+                   strcmp(it->parent, parentId) == 0) {
+            shouldRemove = true;
+        }
+
+        if (shouldRemove) {
+            Serial.printf("[MenuRegistry] Removed entry: %s (parent: %s)\n",
+                          it->id, it->parent ? it->parent : "root");
+            it = entries_.erase(it);
+            removed++;
+        } else {
+            ++it;
+        }
+    }
+
+    return removed;
+}
+
+MenuEntry* MenuRegistry::findEntry(MenuID id) {
+    if (id == nullptr) {
+        return nullptr;
+    }
+
+    for (auto& entry : entries_) {
+        if (strcmp(entry.id, id) == 0) {
+            return &entry;
+        }
+    }
+
+    return nullptr;
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================

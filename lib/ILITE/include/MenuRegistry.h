@@ -124,6 +124,27 @@ public:
     static void clear();
 
     /**
+     * @brief Remove a specific entry by ID
+     * @param id Entry ID to remove
+     * @return true if entry was found and removed
+     */
+    static bool removeEntry(MenuID id);
+
+    /**
+     * @brief Remove all entries with a specific parent
+     * @param parentId Parent ID
+     * @return Number of entries removed
+     */
+    static int removeEntriesByParent(MenuID parentId);
+
+    /**
+     * @brief Find entry by ID (non-const version for internal use)
+     * @param id Entry ID
+     * @return Pointer to entry, or nullptr if not found
+     */
+    static MenuEntry* findEntry(MenuID id);
+
+    /**
      * @brief Initialize built-in menu structure
      *
      * Creates default menus: Home, Settings, Quick Actions, etc.
