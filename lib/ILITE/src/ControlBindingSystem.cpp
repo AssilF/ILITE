@@ -13,6 +13,7 @@ std::vector<ControlBinding> ControlBindingSystem::bindings_;
 bool ControlBindingSystem::enabled_ = true;
 ControlBindingSystem::ButtonState ControlBindingSystem::buttonStates_[7];
 ControlBindingSystem::EncoderState ControlBindingSystem::encoderState_;
+bool ControlBindingSystem::capturingModuleBindings_ = false;
 
 // Constants
 static constexpr uint32_t CLICK_MAX_DURATION = 300;    // ms
@@ -40,7 +41,9 @@ void ControlBindingSystem::begin() {
 // ============================================================================
 
 void ControlBindingSystem::registerBinding(const ControlBinding& binding) {
-    bindings_.push_back(binding);
+    ControlBinding stored = binding;
+    stored.moduleOwned = capturingModuleBindings_;
+    bindings_.push_back(stored);
     Serial.printf("[ControlBindingSystem] Registered binding for input %d, event %d (priority %d)\n",
                   binding.input, binding.event, binding.priority);
 }
@@ -51,6 +54,23 @@ std::vector<ControlBinding>& ControlBindingSystem::getAllBindings() {
 
 void ControlBindingSystem::clear() {
     bindings_.clear();
+}
+
+void ControlBindingSystem::clearModuleBindings() {
+    bindings_.erase(
+        std::remove_if(bindings_.begin(), bindings_.end(),
+                       [](const ControlBinding& binding) {
+                           return binding.moduleOwned;
+                       }),
+        bindings_.end());
+}
+
+void ControlBindingSystem::beginModuleCapture() {
+    capturingModuleBindings_ = true;
+}
+
+void ControlBindingSystem::endModuleCapture() {
+    capturingModuleBindings_ = false;
 }
 
 void ControlBindingSystem::setEnabled(bool enabled) {

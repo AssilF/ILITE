@@ -358,6 +358,17 @@ const char* EspNowDiscovery::getPeerName(int index) const {
     return peers[index].inUse ? peers[index].identity.customId : "";
 }
 
+const Identity* EspNowDiscovery::getPeerIdentity(int index) const {
+    if (index < 0 || index >= kMaxPeers) {
+        return nullptr;
+    }
+    const PeerEntry& entry = peers[index];
+    if (!entry.inUse) {
+        return nullptr;
+    }
+    return &entry.identity;
+}
+
 int EspNowDiscovery::findPeerIndex(const uint8_t* mac) const {
     if (!mac) {
         return -1;

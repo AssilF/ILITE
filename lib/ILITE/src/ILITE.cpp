@@ -15,6 +15,7 @@
 // Extension systems (optional)
 #include "IconLibrary.h"
 #include "AudioRegistry.h"
+#include "AudioCues.h"
 #include "MenuRegistry.h"
 #include "ScreenRegistry.h"
 #include "ControlBindingSystem.h"
@@ -234,6 +235,7 @@ bool ILITEFramework::initHardware() {
         audioSetup();
         audioPlayStartup();
     }
+    ensureDefaultAudioCuesRegistered();
 
     // Initialize Framework Engine (v2.0)
     Serial.println("  - FrameworkEngine...");
@@ -562,7 +564,6 @@ void ILITEFramework::setActiveModule(ILITEModule* module) {
 
     // Activate new module
     if (module != nullptr) {
-        module->onActivate();
         Logger::getInstance().logf("Activated: %s", module->getModuleName());
 
         // Call onPair if we're already paired

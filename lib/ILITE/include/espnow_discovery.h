@@ -81,6 +81,7 @@ public:
     int  getPeerCount() const { return peerCount; }
     const uint8_t* getPeer(int index) const;
     const char* getPeerName(int index) const;
+    const Identity* getPeerIdentity(int index) const;
     int findPeerIndex(const uint8_t* mac) const;
     bool sendCommand(const uint8_t* mac, const char* command);
     void resetLinkState();

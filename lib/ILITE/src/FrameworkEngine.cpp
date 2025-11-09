@@ -14,6 +14,7 @@
 #include "DefaultActions.h"
 #include "IconLibrary.h"
 #include "InputManager.h"
+#include "ControlBindingSystem.h"
 #include "input.h"
 #include <WiFi.h>
 #include <algorithm>
@@ -995,13 +996,9 @@ MenuID FrameworkEngine::currentMenuId() const {
 // ============================================================================
 
 void FrameworkEngine::loadModule(ILITEModule* module) {
-    // Deactivate current module if any
-    if (currentModule_) {
-        currentModule_->onDeactivate();
-    }
-
     // Clear module menu entries from previous module
     clearModuleMenuEntries();
+    ControlBindingSystem::clearModuleBindings();
 
     // Load new module
     currentModule_ = module;
@@ -1012,7 +1009,9 @@ void FrameworkEngine::loadModule(ILITEModule* module) {
 
     // Activate new module (it will register its own encoder functions)
     if (currentModule_) {
+        ControlBindingSystem::beginModuleCapture();
         currentModule_->onActivate();
+        ControlBindingSystem::endModuleCapture();
 
         // Build and register module menu entries
         registerModuleMenuEntries();

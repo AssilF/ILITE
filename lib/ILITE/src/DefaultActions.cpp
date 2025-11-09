@@ -23,12 +23,15 @@ enum class ActiveScreen {
     NONE,
     TERMINAL,
     DEVICES,
+    DEVICE_INFO,
     SETTINGS
 };
 
 static ActiveScreen currentScreen = ActiveScreen::NONE;
 static int scrollOffset = 0;
 static int selectedItem = 0;
+static int deviceDetailIndex = -1;
+static int deviceDetailAction = 0;
 
 // ============================================================================
 // Public API - Screen Management
@@ -49,6 +52,8 @@ void openDevices() {
         currentScreen = ActiveScreen::DEVICES;
         scrollOffset = 0;
         selectedItem = 0;
+        deviceDetailIndex = -1;
+        deviceDetailAction = 0;
         AudioRegistry::play("menu_select");
         Serial.println("[DefaultActions] Devices screen opened");
     }
@@ -81,6 +86,8 @@ void closeActiveScreen() {
         currentScreen = ActiveScreen::NONE;
         scrollOffset = 0;
         selectedItem = 0;
+        deviceDetailIndex = -1;
+        deviceDetailAction = 0;
         AudioRegistry::play("menu_select");
         Serial.println("[DefaultActions] Screen closed, returning to dashboard");
     }
@@ -110,6 +117,9 @@ void renderActiveScreen(DisplayCanvas& canvas) {
             break;
         case ActiveScreen::DEVICES:
             renderDevicesScreen(canvas);
+            break;
+        case ActiveScreen::DEVICE_INFO:
+            renderDeviceInfoScreen(canvas);
             break;
         case ActiveScreen::SETTINGS:
             renderSettingsScreen(canvas);
@@ -248,6 +258,67 @@ void renderDevicesScreen(DisplayCanvas& canvas) {
     }
 }
 
+void renderDeviceInfoScreen(DisplayCanvas& canvas) {
+    canvas.setFont(DisplayCanvas::SMALL);
+    canvas.drawText(2, 12, "Device Details");
+
+    const int deviceCount = discovery.getPeerCount();
+    if (deviceDetailIndex < 0 || deviceDetailIndex >= deviceCount) {
+        canvas.setFont(DisplayCanvas::TINY);
+        canvas.drawText(2, 28, "Device unavailable.");
+        canvas.drawText(2, 38, "It may have timed out.");
+        deviceDetailAction = 1;  // Default to Cancel
+    } else {
+        const Identity* identity = discovery.getPeerIdentity(deviceDetailIndex);
+        const uint8_t* mac = discovery.getPeer(deviceDetailIndex);
+        const int pairedIndex = discovery.getPairedPeerIndex();
+        const bool isActive = (deviceDetailIndex == pairedIndex);
+
+        canvas.setFont(DisplayCanvas::TINY);
+        const char* name = (identity && identity->customId[0]) ? identity->customId : "Unknown";
+        const char* deviceType = (identity && identity->deviceType[0]) ? identity->deviceType : "Unknown";
+        const char* platform = (identity && identity->platform[0]) ? identity->platform : "Unknown";
+
+        canvas.drawTextF(2, 24, "Name: %s", name);
+        canvas.drawTextF(2, 34, "Type: %s", deviceType);
+        canvas.drawTextF(2, 44, "Platform: %s", platform);
+
+        char macStr[24] = "Unavailable";
+        if (mac != nullptr) {
+            EspNowDiscovery::macToString(mac, macStr, sizeof(macStr));
+        }
+        canvas.drawTextF(2, 54, "MAC: %s", macStr);
+        canvas.drawTextF(2, 62, "Status: %s", isActive ? "Paired" : "Discovered");
+    }
+
+    const int buttonWidth = 56;
+    const int buttonHeight = 10;
+    const int buttonBaseline = 60;
+
+    auto drawButton = [&](int index, int x, const char* label, bool enabled) {
+        bool selected = (deviceDetailAction == index);
+        if (selected) {
+            canvas.drawRect(x, buttonBaseline - 8, buttonWidth, buttonHeight, 1);
+            canvas.setDrawColor(0);
+        }
+
+        canvas.setFont(enabled ? DisplayCanvas::SMALL : DisplayCanvas::TINY);
+        canvas.drawText(x + 6, buttonBaseline, label);
+
+        if (selected) {
+            canvas.setDrawColor(1);
+        }
+    };
+
+    const bool isCurrentSelectionValid =
+        (deviceDetailIndex >= 0 && deviceDetailIndex < discovery.getPeerCount());
+    const bool isPairedDevice =
+        (isCurrentSelectionValid && deviceDetailIndex == discovery.getPairedPeerIndex());
+
+    drawButton(0, 4, isPairedDevice ? "ACTIVE" : "PAIR", !isPairedDevice && isCurrentSelectionValid);
+    drawButton(1, 68, "CANCEL", true);
+}
+
 void renderSettingsScreen(DisplayCanvas& canvas) {
     const int startY = 14;  // Below top strip
     int y = startY;
@@ -314,6 +385,19 @@ void handleEncoderRotate(int delta) {
             maxItems = discovery.getPeerCount();
             if (maxItems == 0) maxItems = 1;  // At least 1 for "no devices"
             break;
+        case ActiveScreen::DEVICE_INFO: {
+            if (discovery.getPeerCount() == 0) {
+                currentScreen = ActiveScreen::DEVICES;
+                deviceDetailIndex = -1;
+                deviceDetailAction = 0;
+                return;
+            }
+            deviceDetailAction += delta;
+            if (deviceDetailAction < 0) deviceDetailAction = 0;
+            if (deviceDetailAction > 1) deviceDetailAction = 1;
+            AudioRegistry::play("menu_select");
+            return;
+        }
         case ActiveScreen::SETTINGS:
             maxItems = 5; // Settings menu count
             break;
@@ -350,10 +434,51 @@ void handleEncoderPress() {
             break;
 
         case ActiveScreen::DEVICES:
-            // TODO: Pair with selected device
-            Serial.printf("[DefaultActions] Pairing with device %d\n", selectedItem);
-            AudioRegistry::play("paired");
-            closeActiveScreen();
+            {
+                const int deviceCount = discovery.getPeerCount();
+                if (deviceCount == 0) {
+                    AudioRegistry::play("error");
+                    return;
+                }
+                if (selectedItem >= deviceCount) {
+                    selectedItem = deviceCount - 1;
+                }
+                deviceDetailIndex = selectedItem;
+                deviceDetailAction = (deviceDetailIndex == discovery.getPairedPeerIndex()) ? 1 : 0;
+                currentScreen = ActiveScreen::DEVICE_INFO;
+                AudioRegistry::play("menu_select");
+            }
+            break;
+
+        case ActiveScreen::DEVICE_INFO:
+            if (deviceDetailAction == 0) {
+                const int deviceCount = discovery.getPeerCount();
+                if (deviceDetailIndex < 0 || deviceDetailIndex >= deviceCount) {
+                    AudioRegistry::play("error");
+                    currentScreen = ActiveScreen::DEVICES;
+                    break;
+                }
+
+                const bool alreadyPaired = (deviceDetailIndex == discovery.getPairedPeerIndex());
+                const uint8_t* mac = discovery.getPeer(deviceDetailIndex);
+                if (!alreadyPaired && mac != nullptr && discovery.beginPairingWith(mac)) {
+                    Serial.printf("[DefaultActions] Pairing with device %d\n", deviceDetailIndex);
+                    AudioRegistry::play("paired");
+                } else if (alreadyPaired) {
+                    AudioRegistry::play("menu_select");
+                } else {
+                    AudioRegistry::play("error");
+                }
+                selectedItem = deviceDetailIndex;
+                currentScreen = ActiveScreen::DEVICES;
+                deviceDetailIndex = -1;
+                deviceDetailAction = 0;
+            } else {
+                AudioRegistry::play("menu_back");
+                currentScreen = ActiveScreen::DEVICES;
+                deviceDetailIndex = -1;
+                deviceDetailAction = 0;
+            }
             break;
 
         case ActiveScreen::SETTINGS:

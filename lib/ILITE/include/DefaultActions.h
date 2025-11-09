@@ -113,6 +113,15 @@ namespace DefaultActions {
     void renderDevicesScreen(DisplayCanvas& canvas);
 
     /**
+     * @brief Render detailed device info / pair-cancel screen
+     *
+     * Shows metadata for the selected ESP-NOW peer and exposes pairing actions.
+     *
+     * @param canvas Display canvas to render to
+     */
+    void renderDeviceInfoScreen(DisplayCanvas& canvas);
+
+    /**
      * @brief Render settings screen
      *
      * Internal function called by display engine when settings screen is active

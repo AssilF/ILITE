@@ -62,6 +62,7 @@ struct ControlBinding {
     const char* screenId;                   ///< Screen-specific binding (optional)
     uint32_t duration;                      ///< Duration for HOLD event (ms)
     int priority;                           ///< Priority (higher = executed first)
+    bool moduleOwned = false;               ///< true if binding belongs to currently active module
 };
 
 /**
@@ -99,6 +100,23 @@ public:
     static void clear();
 
     /**
+     * @brief Clear only module-owned bindings
+     */
+    static void clearModuleBindings();
+
+    /**
+     * @brief Enter module binding capture mode
+     *
+     * While active, all new bindings are marked as module-owned.
+     */
+    static void beginModuleCapture();
+
+    /**
+     * @brief Exit module binding capture mode
+     */
+    static void endModuleCapture();
+
+    /**
      * @brief Enable/disable the binding system
      * @param enabled true to enable, false to disable
      */
@@ -133,6 +151,7 @@ private:
 
     static std::vector<ControlBinding> bindings_;
     static bool enabled_;
+    static bool capturingModuleBindings_;
 
     static ButtonState buttonStates_[7];  // 6 buttons + encoder button
     static EncoderState encoderState_;

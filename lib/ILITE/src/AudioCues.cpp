@@ -12,6 +12,7 @@
  */
 
 #include "AudioRegistry.h"
+#include "AudioCues.h"
 #include "audio_feedback.h"
 
 // ============================================================================
@@ -189,3 +190,8 @@ REGISTER_AUDIO_CUSTOM(gripper, []() {
     delay(10);
     audioPlayTone(1000, 35);
 });
+
+void ensureDefaultAudioCuesRegistered() {
+    // Intentionally empty; referencing this symbol forces the linker to keep
+    // this translation unit so that the static cue registrars run at startup.
+}
