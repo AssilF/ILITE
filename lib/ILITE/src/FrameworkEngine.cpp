@@ -610,13 +610,17 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
         canvas.drawRect(battBarX + 1, battBarY + 1, fillWidth, battBarHeight - 2, true);
     }
 
-    // Draw percentage text in XOR mode (inverted where overlapping fill)
+    // Draw percentage text by punching out the fill so it's always readable
     char battStr[8];
     snprintf(battStr, sizeof(battStr), "%d%%", batteryPercent_);
-    uint8_t textWidth = strlen(battStr) * 4;
-    canvas.setDrawColor(2); // XOR mode
-    canvas.drawText(battBarX + (battBarWidth - textWidth) / 2, battBarY + 6, battStr);
-    canvas.setDrawColor(1); // Restore normal mode
+    int16_t battTextWidth = canvas.getTextWidth(battStr);
+    int16_t battTextX = battBarX + (battBarWidth - battTextWidth) / 2;
+    if (battTextX < battBarX + 1) {
+        battTextX = battBarX + 1;
+    }
+    canvas.setDrawColor(0);
+    canvas.drawText(battTextX, battBarY + 6, battStr);
+    canvas.setDrawColor(1);
 
     // Status icon using u8g2 open iconic font
     const char* statusIcon = " ";
@@ -804,7 +808,7 @@ void FrameworkEngine::renderMenu(DisplayCanvas& canvas) {
         if (entry->isToggle && entry->getToggleState) {
             canvas.drawTextRight(canvas.getWidth() - 4, y, entry->getToggleState() ? "ON" : "OFF");
         } else if (entry->getValue || (entry->isEditableInt || entry->isEditableFloat)) {
-            // Show edited value with blinking cursor if in edit mode for this entry
+            // Show edited value with blinking outline if in edit mode for this entry
             if (menuEditMode_ && editingEntry_ == entry) {
                 static char editBuffer[32];
                 if (entry->isEditableInt) {
@@ -813,13 +817,38 @@ void FrameworkEngine::renderMenu(DisplayCanvas& canvas) {
                     snprintf(editBuffer, sizeof(editBuffer), "%.2f", editValueFloat_);
                 }
 
-                // Blinking cursor (500ms interval)
-                bool showCursor = ((millis() - cursorBlinkTimer_) % 1000) < 500;
-                if (showCursor) {
-                    strcat(editBuffer, "_");
+                const int16_t valueRight = canvas.getWidth() - 4;
+                const int16_t textWidth = canvas.getTextWidth(editBuffer);
+                const int16_t textHeight = canvas.getTextHeight();
+                const int8_t padding = 2;
+                int16_t highlightWidth = textWidth + padding * 2;
+                if (highlightWidth > valueRight) {
+                    highlightWidth = valueRight;
+                }
+                int16_t highlightX = valueRight - highlightWidth;
+                if (highlightX < 0) {
+                    highlightX = 0;
+                }
+                int16_t highlightY = y - textHeight - 1;
+                if (highlightY < 0) {
+                    highlightY = 0;
+                }
+                int16_t highlightHeight = textHeight + 2;
+                if (highlightHeight < 6) {
+                    highlightHeight = 6;
                 }
 
-                canvas.drawTextRight(canvas.getWidth() - 4, y, editBuffer);
+                canvas.drawRect(highlightX, highlightY, highlightWidth, highlightHeight, false);
+
+                bool fillHighlight = ((millis() - cursorBlinkTimer_) % 1000) < 500;
+                if (fillHighlight && highlightWidth > 2 && highlightHeight > 2) {
+                    canvas.drawRect(highlightX + 1, highlightY + 1, highlightWidth - 2, highlightHeight - 2, true);
+                    canvas.setDrawColor(0);
+                    canvas.drawTextRight(valueRight - padding, y, editBuffer);
+                    canvas.setDrawColor(1);
+                } else {
+                    canvas.drawTextRight(valueRight - padding, y, editBuffer);
+                }
             } else {
                 // Normal value display
                 const char* value = entry->getValue();
