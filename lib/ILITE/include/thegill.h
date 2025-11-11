@@ -146,6 +146,9 @@ enum class ArmCameraView : uint8_t {
     Overhead = 2,       // Top-down view
     Side = 3,           // Side profile view
     Front = 4,          // Front view
+    OperatorLeft = 5,   // Operator standing left of arm
+    OperatorRight = 6,  // Operator standing right of arm
+    ToolTip = 7         // Camera looking back from tool tip
 };
 
 extern ArmControlCommand armCommand;
@@ -157,3 +160,12 @@ extern IKEngine::Vec3 targetPosition;
 extern IKEngine::Vec3 targetOrientation;
 extern IKEngine::InverseKinematics ikSolver;
 
+void setPrecisionMode(bool enabled);
+bool isPrecisionModeEnabled();
+void requestOrientationRetarget();
+void setTargetToolRoll(float degrees);
+float getTargetToolRoll();
+void toggleUnifiedGripper();
+void setUnifiedGripper(bool open);
+bool isGripperOpen();
+void setGripperFingerPosition(uint8_t fingerIndex, float degrees);

@@ -84,6 +84,11 @@ static bool lastButton3State = false;
 static bool lastJoyBtnAState = false;
 static float gripperAngleOpen = 45.0f;
 static float gripperAngleClosed = 90.0f;
+static bool precisionMode = false;
+static bool orientationAnglesValid = false;
+static float orientationPitchRad = 0.0f;
+static float orientationYawRad = 0.0f;
+static float targetToolRollDeg = 90.0f;
 
 
 float applyEasingCurve(GillEasing mode, float t){
@@ -115,13 +120,15 @@ float applyEasingCurve(GillEasing mode, float t){
 
 void updateThegillControl() {
     // Mode switching is now handled by ControlBindingSystem in ModuleRegistration.cpp
+    const InputManager& inputs = InputManager::getInstance();
+    const float potValue = inputs.getPotentiometer();
+    const float precisionScalar = precisionMode ? 0.4f : 1.0f;
+    const float adaptiveScalar = (0.35f + potValue * 0.65f) * precisionScalar;
 
     // ========================================================================
     // DRIVE MODE - Normal drivetrain control
     // ========================================================================
     if (mechIaneMode == MechIaneMode::DriveMode) {
-        // Get InputManager instance for calibrated, filtered joystick values
-        const InputManager& inputs = InputManager::getInstance();
 
         if (thegillConfig.mode == GillMode::Default) {
             // Tank drive mode: Left joystick Y = left motors, Right joystick Y = right motors
@@ -132,6 +139,8 @@ void updateThegillControl() {
             // Apply easing curve on controller side
             leftY = applyEasing(leftY, thegillConfig.easing);
             rightY = applyEasing(rightY, thegillConfig.easing);
+            leftY = constrain(leftY * adaptiveScalar, -1.0f, 1.0f);
+            rightY = constrain(rightY * adaptiveScalar, -1.0f, 1.0f);
 
             // Convert to motor range (-32767 to +32767)
             int16_t leftMotor = normalizedToMotor(leftY);
@@ -152,6 +161,8 @@ void updateThegillControl() {
             // Apply easing curve on controller side
             throttle = applyEasing(throttle, thegillConfig.easing);
             turn = applyEasing(turn, thegillConfig.easing);
+            throttle *= adaptiveScalar;
+            turn *= adaptiveScalar;
 
             // Differential drive calculation
             float leftMotor = constrain(throttle + turn, -1.0f, 1.0f);
@@ -170,10 +181,6 @@ void updateThegillControl() {
         thegillCommand.easingRate = thegillRuntime.easingRate;
 
         // Button states are handled by ControlBindingSystem
-        // Brake and honk are not used in drive mode by default
-        thegillCommand.flags = 0;
-        thegillRuntime.brakeActive = false;
-        thegillRuntime.honkActive = false;
     }
 
     // ========================================================================
@@ -185,12 +192,10 @@ void updateThegillControl() {
         thegillCommand.leftRear = 0;
         thegillCommand.rightFront = 0;
         thegillCommand.rightRear = 0;
-        thegillCommand.flags = 0;
 
         // XYZ/Orientation toggle is now handled by ControlBindingSystem in ModuleRegistration.cpp
 
         // Read joysticks using InputManager (provides -1.0 to +1.0 with filtering and deadzone)
-        const InputManager& inputs = InputManager::getInstance();
         float joyAX = inputs.getJoystickA_X();
         float joyAY = inputs.getJoystickA_Y();
         float joyBY = inputs.getJoystickB_Y();
@@ -201,7 +206,7 @@ void updateThegillControl() {
             // Joystick A Y -> Y axis (forward/back)
             // Joystick B Y -> Z axis (up/down)
 
-            const float positionSpeed = 5.0f; // mm per frame at max joystick
+            const float positionSpeed = 8.0f * adaptiveScalar; // mm per frame at max joystick
             targetPosition.x += joyAX * positionSpeed;
             targetPosition.y += joyAY * positionSpeed;
             targetPosition.z += joyBY * positionSpeed;
@@ -217,40 +222,31 @@ void updateThegillControl() {
             // Joystick A Y -> Pitch
             // Joystick B Y -> Roll
 
-            const float orientSpeed = 0.05f; // radians per frame at max joystick
-
-            // Update target orientation using spherical coordinates
-            // Convert current direction to spherical
-            float length = sqrtf(targetOrientation.x * targetOrientation.x +
-                               targetOrientation.y * targetOrientation.y +
-                               targetOrientation.z * targetOrientation.z);
-
-            if (length > 0.001f) {
-                float pitch = asinf(targetOrientation.z / length);
-                float yaw = atan2f(targetOrientation.y, targetOrientation.x);
-
-                // Apply joystick inputs
-                pitch += joyAY * orientSpeed;
-                yaw += joyAX * orientSpeed;
-
-                // Clamp pitch to avoid singularities
-                pitch = constrain(pitch, -PI/2.0f + 0.1f, PI/2.0f - 0.1f);
-
-                // Convert back to Cartesian
-                targetOrientation.x = cosf(pitch) * cosf(yaw);
-                targetOrientation.y = cosf(pitch) * sinf(yaw);
-                targetOrientation.z = sinf(pitch);
-
-                // Normalize
-                length = sqrtf(targetOrientation.x * targetOrientation.x +
-                             targetOrientation.y * targetOrientation.y +
-                             targetOrientation.z * targetOrientation.z);
-                if (length > 0.001f) {
-                    targetOrientation.x /= length;
-                    targetOrientation.y /= length;
-                    targetOrientation.z /= length;
+            if (!orientationAnglesValid) {
+                float length = sqrtf(targetOrientation.x * targetOrientation.x +
+                                   targetOrientation.y * targetOrientation.y +
+                                   targetOrientation.z * targetOrientation.z);
+                if (length < 0.001f) {
+                    length = 1.0f;
+                    targetOrientation = {0.0f, 0.0f, 1.0f};
                 }
+                orientationPitchRad = asinf(targetOrientation.z / length);
+                orientationYawRad = atan2f(targetOrientation.y, targetOrientation.x);
+                orientationAnglesValid = true;
             }
+
+            const float orientSpeed = 0.08f * adaptiveScalar; // radians per frame at max joystick
+            const float rollSpeedDeg = 10.0f * (0.5f + potValue) * precisionScalar;
+
+            orientationPitchRad += joyAY * orientSpeed;
+            orientationYawRad += joyAX * orientSpeed;
+            orientationPitchRad = constrain(orientationPitchRad, -PI / 2.0f + 0.1f, PI / 2.0f - 0.1f);
+
+            targetToolRollDeg = constrain(targetToolRollDeg + joyBY * rollSpeedDeg, 0.0f, 180.0f);
+
+            targetOrientation.x = cosf(orientationPitchRad) * cosf(orientationYawRad);
+            targetOrientation.y = cosf(orientationPitchRad) * sinf(orientationYawRad);
+            targetOrientation.z = sinf(orientationPitchRad);
         }
 
         // Solve IK for current target
@@ -262,7 +258,7 @@ void updateThegillControl() {
         armCommand.shoulderDegrees = solution.joints.shoulderDeg;
         armCommand.elbowDegrees = solution.joints.elbowDeg;
         armCommand.pitchDegrees = solution.joints.gripperPitchDeg;
-        armCommand.rollDegrees = solution.joints.gripperRollDeg;
+        armCommand.rollDegrees = targetToolRollDeg;
         armCommand.yawDegrees = solution.joints.gripperYawDeg;
 
         armCommand.validMask = ArmCommandMask::AllServos | ArmCommandMask::Extension;
@@ -376,6 +372,91 @@ Point2D projectIsometric(float x, float y, float z, float scale = 0.12f) {
             // Front view (looking from Y axis)
             p.x = static_cast<int16_t>(x * 0.12f + 64);
             p.y = static_cast<int16_t>(-z * 0.12f + 48);
+            break;
+        }
+
+        case ArmCameraView::OperatorLeft: {
+            const float camX = -150.0f;
+            const float camY = -250.0f;
+            const float camZ = 120.0f;
+            float dx = x - camX;
+            float dy = y - camY;
+            float dz = z - camZ;
+
+            const float yaw = 0.4f;
+            const float pitch = 0.35f;
+            float cosYaw = cosf(yaw);
+            float sinYaw = sinf(yaw);
+            float cosPitch = cosf(pitch);
+            float sinPitch = sinf(pitch);
+
+            float x1 = dx * cosYaw - dy * sinYaw;
+            float y1 = dx * sinYaw + dy * cosYaw;
+            float y2 = y1 * cosPitch - dz * sinPitch;
+            float z2 = y1 * sinPitch + dz * cosPitch;
+
+            float depth = y2 + 500.0f;
+            if (depth < 10.0f) depth = 10.0f;
+            float perspective = 220.0f / depth;
+            p.x = static_cast<int16_t>(x1 * perspective + 64);
+            p.y = static_cast<int16_t>(-z2 * perspective + 44);
+            break;
+        }
+
+        case ArmCameraView::OperatorRight: {
+            const float camX = 150.0f;
+            const float camY = -250.0f;
+            const float camZ = 140.0f;
+            float dx = x - camX;
+            float dy = y - camY;
+            float dz = z - camZ;
+
+            const float yaw = -0.4f;
+            const float pitch = 0.4f;
+            float cosYaw = cosf(yaw);
+            float sinYaw = sinf(yaw);
+            float cosPitch = cosf(pitch);
+            float sinPitch = sinf(pitch);
+
+            float x1 = dx * cosYaw - dy * sinYaw;
+            float y1 = dx * sinYaw + dy * cosYaw;
+            float y2 = y1 * cosPitch - dz * sinPitch;
+            float z2 = y1 * sinPitch + dz * cosPitch;
+
+            float depth = y2 + 500.0f;
+            if (depth < 10.0f) depth = 10.0f;
+            float perspective = 220.0f / depth;
+            p.x = static_cast<int16_t>(x1 * perspective + 64);
+            p.y = static_cast<int16_t>(-z2 * perspective + 44);
+            break;
+        }
+
+        case ArmCameraView::ToolTip: {
+            // Camera positioned ahead of the tool looking back toward base
+            const float camX = 420.0f;
+            const float camY = 0.0f;
+            const float camZ = 180.0f;
+            float dx = x - camX;
+            float dy = y - camY;
+            float dz = z - camZ;
+
+            const float yaw = PI;          // Look back toward base
+            const float pitch = -0.2f;     // Slight downward tilt
+            float cosYaw = cosf(yaw);
+            float sinYaw = sinf(yaw);
+            float cosPitch = cosf(pitch);
+            float sinPitch = sinf(pitch);
+
+            float x1 = dx * cosYaw - dy * sinYaw;
+            float y1 = dx * sinYaw + dy * cosYaw;
+            float y2 = y1 * cosPitch - dz * sinPitch;
+            float z2 = y1 * sinPitch + dz * cosPitch;
+
+            float depth = y2 + 400.0f;
+            if (depth < 10.0f) depth = 10.0f;
+            float perspective = 240.0f / depth;
+            p.x = static_cast<int16_t>(x1 * perspective + 64);
+            p.y = static_cast<int16_t>(-z2 * perspective + 38);
             break;
         }
     }
@@ -522,6 +603,53 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
         canvas.drawText(110, 63, "OPEN");
     } else {
         canvas.drawText(110, 63, "CLSD");
+    }
+}
+
+void setPrecisionMode(bool enabled) {
+    precisionMode = enabled;
+}
+
+bool isPrecisionModeEnabled() {
+    return precisionMode;
+}
+
+void requestOrientationRetarget() {
+    orientationAnglesValid = false;
+}
+
+void setTargetToolRoll(float degrees) {
+    targetToolRollDeg = constrain(degrees, 0.0f, 180.0f);
+}
+
+float getTargetToolRoll() {
+    return targetToolRollDeg;
+}
+
+void setUnifiedGripper(bool open) {
+    gripperOpen = open;
+    const float targetDeg = open ? gripperAngleOpen : gripperAngleClosed;
+    armCommand.gripper1Degrees = targetDeg;
+    armCommand.gripper2Degrees = targetDeg;
+    armCommand.validMask |= ArmCommandMask::AllGrippers;
+}
+
+void toggleUnifiedGripper() {
+    setUnifiedGripper(!gripperOpen);
+}
+
+bool isGripperOpen() {
+    return gripperOpen;
+}
+
+void setGripperFingerPosition(uint8_t fingerIndex, float degrees) {
+    const float clamped = constrain(degrees, 0.0f, 180.0f);
+    if (fingerIndex == 0) {
+        armCommand.gripper1Degrees = clamped;
+        armCommand.validMask |= ArmCommandMask::Gripper1;
+    } else {
+        armCommand.gripper2Degrees = clamped;
+        armCommand.validMask |= ArmCommandMask::Gripper2;
     }
 }
 

@@ -15,6 +15,11 @@ constexpr uint8_t joystickB_Y = 36;
 constexpr uint8_t button1 = 23;
 constexpr uint8_t button2 = 25;
 constexpr uint8_t button3 = 27;
+
+// Human-friendly aliases for face buttons
+constexpr uint8_t buttonLeftAction  = button1;  ///< Primary action button
+constexpr uint8_t buttonShift       = button2;  ///< Shift/auxiliary modifier
+constexpr uint8_t buttonRightAction = button3;  ///< Secondary action button
 constexpr uint8_t potA = 32;
 constexpr uint8_t batteryPin = 33;  // ADC1_CH5 for battery voltage (divided by 2)
 

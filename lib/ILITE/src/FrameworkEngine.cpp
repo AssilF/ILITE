@@ -473,19 +473,12 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
         // Draw outlined box (always)
         canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
 
-        // Fill if selected
-        if (menuSelected) {
-            canvas.drawRect(buttonX + 1, buttonY + 1, buttonWidth - 2, buttonHeight - 2, true);
-            canvas.setDrawColor(0); // Invert text for visibility
-        }
-
         // Draw MENU text
         canvas.setFont(DisplayCanvas::TINY);
-        canvas.drawText(buttonX + 2, buttonY + 6, "MENU");
-
         if (menuSelected) {
-            canvas.setDrawColor(1); // Restore normal
+            drawBlinkUnderline(canvas, buttonX + 2, buttonY + buttonHeight - 1, buttonWidth - 4);
         }
+        canvas.drawText(buttonX + 2, buttonY + 6, "MENU");
 
         buttonX += buttonWidth + buttonSpacing;
 
@@ -498,13 +491,10 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             // Draw outlined box
             canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
 
-            // Fill if selected
-            if (f1Selected) {
-                canvas.drawRect(buttonX + 1, buttonY + 1, buttonWidth - 2, buttonHeight - 2, true);
-                canvas.setDrawColor(0); // Invert text
-            }
-
             // Draw label
+            if (f1Selected) {
+                drawBlinkUnderline(canvas, buttonX + 3, buttonY + buttonHeight - 1, buttonWidth - 6);
+            }
             canvas.drawText(buttonX + 3, buttonY + 6, encoderFunctions_[0].label);
 
             // Draw toggle indicator (small square in top-right corner)
@@ -516,10 +506,6 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
                                indicatorSize,
                                indicatorSize,
                                true);
-            }
-
-            if (f1Selected) {
-                canvas.setDrawColor(1); // Restore normal
             }
 
             buttonX += buttonWidth + buttonSpacing;
@@ -534,13 +520,10 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             // Draw outlined box
             canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
 
-            // Fill if selected
-            if (f2Selected) {
-                canvas.drawRect(buttonX + 1, buttonY + 1, buttonWidth - 2, buttonHeight - 2, true);
-                canvas.setDrawColor(0); // Invert text
-            }
-
             // Draw label
+            if (f2Selected) {
+                drawBlinkUnderline(canvas, buttonX + 3, buttonY + buttonHeight - 1, buttonWidth - 6);
+            }
             canvas.drawText(buttonX + 3, buttonY + 6, encoderFunctions_[1].label);
 
             // Draw toggle indicator (small square in top-right corner)
@@ -552,10 +535,6 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
                                indicatorSize,
                                indicatorSize,
                                true);
-            }
-
-            if (f2Selected) {
-                canvas.setDrawColor(1); // Restore normal
             }
 
             buttonX += buttonWidth + buttonSpacing;
@@ -793,8 +772,7 @@ void FrameworkEngine::renderMenu(DisplayCanvas& canvas) {
 
         const bool selected = (i == menuSelection_);
         if (selected) {
-            canvas.drawRect(0, y - 6, canvas.getWidth(), 11, true);
-            canvas.setDrawColor(0);
+            canvas.drawRect(0, y - 6, canvas.getWidth(), 11, false);
         }
 
         int16_t textX = 4;
@@ -843,13 +821,9 @@ void FrameworkEngine::renderMenu(DisplayCanvas& canvas) {
 
                 bool fillHighlight = ((millis() - cursorBlinkTimer_) % 1000) < 500;
                 if (fillHighlight && highlightWidth > 2 && highlightHeight > 2) {
-                    canvas.drawRect(highlightX + 1, highlightY + 1, highlightWidth - 2, highlightHeight - 2, true);
-                    canvas.setDrawColor(0);
-                    canvas.drawTextRight(valueRight - padding, y, editBuffer);
-                    canvas.setDrawColor(1);
-                } else {
-                    canvas.drawTextRight(valueRight - padding, y, editBuffer);
+                    drawBlinkUnderline(canvas, highlightX + 1, highlightY + highlightHeight - 1, highlightWidth - 2);
                 }
+                canvas.drawTextRight(valueRight - padding, y, editBuffer);
             } else {
                 // Normal value display
                 const char* value = entry->getValue();
@@ -1108,18 +1082,17 @@ void FrameworkEngine::routeButtonEvent(uint8_t buttonIndex, ButtonEvent event) {
         return;
     }
 
-    if (currentModule_ && isPaired_) {
-        // Module is loaded and paired - route to module's button functions
-        // TODO: Call module's button mapping
-        // For now, call onFunctionButton for short press
+    if (currentModule_) {
+        // Route to active module regardless of pairing so developers can test bindings offline
         if (event == ButtonEvent::PRESSED) {
             currentModule_->onFunctionButton(buttonIndex);
         }
-    } else {
-        // No module or not paired - use default functions
-        if (buttonIndex < 3 && defaultButtonCallbacks_[buttonIndex]) {
-            defaultButtonCallbacks_[buttonIndex](event);
-        }
+        return;
+    }
+
+    // No module loaded - use default functions
+    if (buttonIndex < 3 && defaultButtonCallbacks_[buttonIndex]) {
+        defaultButtonCallbacks_[buttonIndex](event);
     }
 }
 
@@ -1504,4 +1477,14 @@ void FrameworkEngine::convertModuleMenuItems(const ModuleMenuItem& parent, MenuI
             convertModuleMenuItems(item, entry.id);
         }
     }
+}
+void FrameworkEngine::drawBlinkUnderline(DisplayCanvas& canvas, int16_t x, int16_t y, int16_t width) {
+    if (width <= 0) {
+        return;
+    }
+    bool visible = ((millis() - cursorBlinkTimer_) % 1000) < 500;
+    if (!visible) {
+        return;
+    }
+    canvas.drawHLine(x, y, width);
 }

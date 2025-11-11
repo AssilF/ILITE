@@ -323,6 +323,36 @@ public:
             },
             ICON_SETTINGS,
             &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.operator_left",
+            "Operator Left",
+            []() {
+                armCameraView = ArmCameraView::OperatorLeft;
+                Serial.println("[TheGill] Camera: Operator Left");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.operator_right",
+            "Operator Right",
+            []() {
+                armCameraView = ArmCameraView::OperatorRight;
+                Serial.println("[TheGill] Camera: Operator Right");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.tool",
+            "Tool Cam",
+            []() {
+                armCameraView = ArmCameraView::ToolTip;
+                Serial.println("[TheGill] Camera: Tool Perspective");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
     }
 
 private:
@@ -482,6 +512,7 @@ private:
             if (mechIaneMode != MechIaneMode::DriveMode) {
                 if (mechIaneMode == MechIaneMode::ArmXYZ) {
                     mechIaneMode = MechIaneMode::ArmOrientation;
+                    requestOrientationRetarget();
                 } else {
                     mechIaneMode = MechIaneMode::ArmXYZ;
                 }
@@ -534,6 +565,7 @@ private:
         binding2.action = []() {
             if (mechIaneMode == MechIaneMode::ArmXYZ) {
                 mechIaneMode = MechIaneMode::ArmOrientation;
+                requestOrientationRetarget();
                 AudioRegistry::play("menu_select");
             } else if (mechIaneMode == MechIaneMode::ArmOrientation) {
                 mechIaneMode = MechIaneMode::ArmXYZ;
@@ -554,32 +586,76 @@ private:
 
                 if (button2Pressed) {
                     // Shift + Button 1: Toggle gripper 1 independently
-                    static float gripperAngleOpen = 45.0f;
-                    static float gripperAngleClosed = 90.0f;
-
-                    if (armCommand.gripper1Degrees == gripperAngleClosed) {
-                        armCommand.gripper1Degrees = gripperAngleOpen;
-                    } else {
-                        armCommand.gripper1Degrees = gripperAngleClosed;
-                    }
-                    armCommand.validMask |= ArmCommandMask::Gripper1;
+                    const float openDeg = 45.0f;
+                    const float closedDeg = 90.0f;
+                    const float current = armCommand.gripper1Degrees;
+                    setGripperFingerPosition(0, (fabsf(current - closedDeg) < 1.0f) ? openDeg : closedDeg);
                     AudioRegistry::play("menu_select");
                 } else {
                     // Just Button 1: Toggle both grippers
-                    static bool gripperOpen = false;
-                    static float gripperAngleOpen = 45.0f;
-                    static float gripperAngleClosed = 90.0f;
-
-                    gripperOpen = !gripperOpen;
-                    armCommand.gripper1Degrees = gripperOpen ? gripperAngleOpen : gripperAngleClosed;
-                    armCommand.gripper2Degrees = gripperOpen ? gripperAngleOpen : gripperAngleClosed;
-                    armCommand.validMask |= ArmCommandMask::AllGrippers;
+                    toggleUnifiedGripper();
                     AudioRegistry::play("menu_select");
                 }
             };
             binding3.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
             ControlBindingSystem::registerBinding(binding3);
         }
+
+        // Joystick B Button: Toggle precision mode for fine manipulation
+        ControlBinding precisionBinding;
+        precisionBinding.input = INPUT_JOYSTICK_B_BUTTON;
+        precisionBinding.event = EVENT_PRESS;
+        precisionBinding.action = []() {
+            setPrecisionMode(!isPrecisionModeEnabled());
+            AudioRegistry::play("toggle");
+            Serial.printf("[TheGillModule] Precision mode %s\n", isPrecisionModeEnabled() ? "ENABLED" : "DISABLED");
+        };
+        ControlBindingSystem::registerBinding(precisionBinding);
+
+        // Button 2 long press: Reset orientation reference and wrist roll
+        ControlBinding orientationReset;
+        orientationReset.input = INPUT_BUTTON2;
+        orientationReset.event = EVENT_LONG_PRESS;
+        orientationReset.action = []() {
+            requestOrientationRetarget();
+            setTargetToolRoll(90.0f);
+            AudioRegistry::play("menu_back");
+            Serial.println("[TheGillModule] Orientation reset");
+        };
+        ControlBindingSystem::registerBinding(orientationReset);
+
+        // Button 2 double click: Snap gripper closed for safety
+        ControlBinding safeClose;
+        safeClose.input = INPUT_BUTTON2;
+        safeClose.event = EVENT_DOUBLE_CLICK;
+        safeClose.action = []() {
+            setUnifiedGripper(false);
+            AudioRegistry::play("menu_select");
+            Serial.println("[TheGillModule] Gripper safety close");
+        };
+        ControlBindingSystem::registerBinding(safeClose);
+
+        // Button 1 double click: Individual finger trim (finger 1 opens)
+        ControlBinding finger1Trim;
+        finger1Trim.input = INPUT_BUTTON1;
+        finger1Trim.event = EVENT_DOUBLE_CLICK;
+        finger1Trim.action = []() {
+            setGripperFingerPosition(0, isGripperOpen() ? 30.0f : 60.0f);
+            AudioRegistry::play("edit_adjust");
+        };
+        finger1Trim.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
+        ControlBindingSystem::registerBinding(finger1Trim);
+
+        // Button 3 double click: Individual finger trim (finger 2 closes)
+        ControlBinding finger2Trim;
+        finger2Trim.input = INPUT_BUTTON3;
+        finger2Trim.event = EVENT_DOUBLE_CLICK;
+        finger2Trim.action = []() {
+            setGripperFingerPosition(1, isGripperOpen() ? 120.0f : 80.0f);
+            AudioRegistry::play("edit_adjust");
+        };
+        finger2Trim.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
+        ControlBindingSystem::registerBinding(finger2Trim);
 
         Serial.println("[TheGillModule] Activated with encoder functions and button bindings");
     }
@@ -591,7 +667,7 @@ private:
         fw.clearEncoderFunction(1);
 
         // Clear button bindings
-        ControlBindingSystem::clear();
+        ControlBindingSystem::clearModuleBindings();
 
         Serial.println("[TheGillModule] Deactivated");
     }

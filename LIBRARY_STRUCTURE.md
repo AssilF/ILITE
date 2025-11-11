@@ -55,6 +55,12 @@ ILITE/
 - Encoder strip buttons are also wiped before activation; modules re-apply theirs once.
 - `ILITEFramework::setActiveModule()` no longer double-calls `onActivate()`, preventing binding duplication and ensuring encoder labels reflect the selected module immediately.
 
+@subsection thegill_controls TheGill Control Enhancements
+- Orientation mode now responds to all three axes: joystick A steers yaw/pitch while joystick B drives wrist roll, with the potentiometer scaling speed and a precision toggle on Joystick B button.
+- Gripper management exposes macros (shift + BTN1 for individual fingers, safety snaps, tool presets) and reuses the new Left/Shift/Right button aliases for clarity.
+- The camera menu adds Operator Left/Right and Tool perspectives to better judge depth on the OLED preview.
+- Button events reach modules even when unpaired, so developers can exercise control schemes before connecting to hardware.
+
 @subsection device_ui Device Detail + Pair/Cancel Screen
 - `DefaultActions` adds a new `DEVICE_INFO` screen reached by pressing the encoder while browsing devices.
 - The page shows `Identity` fields (name, type, platform, MAC, status) using `EspNowDiscovery::getPeerIdentity()`.
@@ -121,4 +127,3 @@ AudioRegistry::registerCue({"menu_select", 640, 50});
 - Global control bindings should be registered from `setup()`; module-scoped ones belong in `onActivate()`.
 - `EspNowDiscovery::getPeerIdentity()` is safe even when devices time out; always guard against `nullptr`.
 - Use `FrameworkEngine::getInstance().setEncoderFunction(slot, func)` to customize the strip, and clear them in `onDeactivate()` if you perform additional teardown.
-
