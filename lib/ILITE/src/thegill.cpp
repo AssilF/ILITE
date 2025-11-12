@@ -266,6 +266,9 @@ void updateThegillControl() {
         // Gripper control is now handled by ControlBindingSystem in ModuleRegistration.cpp
         // TODO: Implement gripper control bindings in ModuleRegistration.cpp
     }
+
+    thegillRuntime.brakeActive = (thegillCommand.flags & GILL_FLAG_BRAKE) != 0;
+    thegillRuntime.honkActive = (thegillCommand.flags & GILL_FLAG_HONK) != 0;
 }
 
 // ============================================================================

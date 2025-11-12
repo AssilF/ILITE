@@ -351,6 +351,8 @@ private:
      * @brief Recursively convert and register ModuleMenuItem tree
      */
     void convertModuleMenuItems(const ModuleMenuItem& parent, MenuID parentMenuId);
+    bool beginStringEdit(const MenuEntry* entry);
+    void drawBlinkUnderline(DisplayCanvas& canvas, int16_t x, int16_t y, int16_t width);
 
     // Core engines
     ButtonEventEngine buttonEngine_;

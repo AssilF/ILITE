@@ -22,6 +22,8 @@
 #include <FrameworkEngine.h>
 #include <ILITE.h>
 #include <espnow_discovery.h>
+#include <connection_log.h>
+#include <strings.h>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -107,6 +109,56 @@ public:
                     sizeof(ThegillTelemetryPacket), true, nullptr, 0};
         }
         return {};
+    }
+
+    bool hasCommandProcessor() const override { return true; }
+    void handleCommand(const char* command) override {
+        if (command == nullptr) {
+            return;
+        }
+
+        String cmd = command;
+        cmd.trim();
+        cmd.toLowerCase();
+
+        if (cmd == "status") {
+            connectionLogAddf("[TheGill] Mode=%s, Mech Mode=%d",
+                              modeLabel(thegillConfig.mode),
+                              static_cast<int>(mechIaneMode));
+            return;
+        }
+
+        if (cmd == "mode drive") {
+            mechIaneMode = MechIaneMode::DriveMode;
+            connectionLogAdd("[TheGill] Switched to Drive mode");
+            return;
+        }
+
+        if (cmd == "mode arm" || cmd == "mode xyz") {
+            mechIaneMode = MechIaneMode::ArmXYZ;
+            connectionLogAdd("[TheGill] Switched to Arm XYZ mode");
+            return;
+        }
+
+        if (cmd == "mode ori") {
+            mechIaneMode = MechIaneMode::ArmOrientation;
+            connectionLogAdd("[TheGill] Switched to Orientation mode");
+            return;
+        }
+
+        if (cmd == "precision on") {
+            setPrecisionMode(true);
+            connectionLogAdd("[TheGill] Precision mode ON");
+            return;
+        }
+
+        if (cmd == "precision off") {
+            setPrecisionMode(false);
+            connectionLogAdd("[TheGill] Precision mode OFF");
+            return;
+        }
+
+        connectionLogAddf("[TheGill] Unknown command: %s", command);
     }
 
     void onInit() override {

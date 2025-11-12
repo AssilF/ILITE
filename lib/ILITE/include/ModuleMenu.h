@@ -30,6 +30,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <cstddef>
 
 #include "IconLibrary.h"
 
@@ -43,7 +44,8 @@ struct ModuleMenuItem {
         Screen,     ///< Opens a custom screen via callback
         Submenu,    ///< Contains nested children
         EditableInt,    ///< Editable integer value
-        EditableFloat   ///< Editable float value
+        EditableFloat,  ///< Editable float value
+        EditableString  ///< Editable string value
     };
 
     std::string id;                       ///< Unique identifier within module
@@ -68,6 +70,11 @@ struct ModuleMenuItem {
     float maxValueFloat = 100.0f;         ///< Maximum float value for editing
     float step = 1.0f;                    ///< Step size for editing
     float coarseStep = 10.0f;             ///< Coarse step size for fast editing
+
+    // Editable string support
+    std::function<void(char*, size_t)> getStringValue; ///< Populate buffer with current value
+    std::function<void(const char*)> setStringValue;   ///< Apply new value
+    size_t maxStringLength = 32;                       ///< Maximum characters (excluding null)
 
     std::vector<ModuleMenuItem> children; ///< Nested entries (Submenu only)
 };
@@ -202,6 +209,28 @@ public:
                                       float maxVal,
                                       float step = 0.1f,
                                       float coarseStep = 1.0f,
+                                      IconID icon = nullptr,
+                                      ModuleMenuItem* parent = nullptr,
+                                      int priority = 0);
+
+    /**
+     * @brief Add an editable string value entry.
+     *
+     * @param id        Unique identifier
+     * @param label     Display label
+     * @param getValue  Function to copy current value into provided buffer
+     * @param setValue  Function to apply new value
+     * @param maxLength Maximum characters (excluding null terminator)
+     * @param icon      Optional icon
+     * @param parent    Parent submenu (nullptr = root)
+     * @param priority  Sorting priority
+     * @return Reference to the created item
+     */
+    ModuleMenuItem& addEditableString(const std::string& id,
+                                      const std::string& label,
+                                      std::function<void(char*, size_t)> getValue,
+                                      std::function<void(const char*)> setValue,
+                                      size_t maxLength = 32,
                                       IconID icon = nullptr,
                                       ModuleMenuItem* parent = nullptr,
                                       int priority = 0);

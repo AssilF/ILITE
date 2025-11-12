@@ -30,6 +30,7 @@
 #include <Arduino.h>
 #include <vector>
 #include <functional>
+#include <cstddef>
 #include "IconLibrary.h"
 
 /// Menu entry ID type
@@ -85,6 +86,12 @@ struct MenuEntry {
     float maxValueFloat = 100.0f;      ///< Maximum float value
     float step = 1.0f;                 ///< Fine step size
     float coarseStep = 10.0f;          ///< Coarse step size (for fast rotation)
+
+    // Editable string support
+    bool isEditableString = false;      ///< Whether this entry edits a string
+    size_t maxStringLength = 32;        ///< Maximum characters (excluding null)
+    std::function<void(char*, size_t)> getStringValueForEdit; ///< Populate buffer with current value
+    std::function<void(const char*)> setStringValue;          ///< Apply edited value
 };
 
 /**

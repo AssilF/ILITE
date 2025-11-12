@@ -176,6 +176,8 @@ struct ILITEConfig {
  */
 class ILITEFramework {
 public:
+    static constexpr size_t WIFI_SSID_MAX_LEN = 31;
+    static constexpr size_t WIFI_PASSWORD_MAX_LEN = 63;
     /**
      * @brief Get singleton instance
      * @return Reference to the ILITEFramework instance
@@ -310,6 +312,24 @@ public:
      * @return Reference to ESP-NOW discovery system
      */
     EspNowDiscovery& getDiscovery();
+
+    /**
+     * @brief Current WiFi SSID string (null-terminated)
+     */
+    const char* getWiFiSSID() const;
+
+    /**
+     * @brief Current WiFi password string (null-terminated)
+     */
+    const char* getWiFiPassword() const;
+
+    /**
+     * @brief Update WiFi credentials (optionally persist + restart AP)
+     * @param ssid New SSID (null-terminated)
+     * @param password New password (null-terminated)
+     * @param persist true to store in NVS
+     */
+    bool updateWiFiCredentials(const char* ssid, const char* password, bool persist = true);
 
     // ========================================================================
     // Statistics
@@ -464,6 +484,14 @@ private:
 
     /// Framework Engine (v2.0)
     class FrameworkEngine* frameworkEngine_;
+
+    // WiFi credential storage
+    char wifiSSIDBuffer_[WIFI_SSID_MAX_LEN + 1];
+    char wifiPasswordBuffer_[WIFI_PASSWORD_MAX_LEN + 1];
+
+    void initializeWiFiCredentials();
+    void loadWiFiCredentialsFromPrefs();
+    void persistWiFiCredentials();
 };
 
 /**

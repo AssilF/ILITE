@@ -12,7 +12,10 @@
 #include "AudioRegistry.h"
 #include "connection_log.h"
 #include "espnow_discovery.h"
+#include "StringBuilder.h"
+#include "ILITE.h"
 #include <Arduino.h>
+#include <cstring>
 
 extern EspNowDiscovery discovery;
 
@@ -32,6 +35,60 @@ static int scrollOffset = 0;
 static int selectedItem = 0;
 static int deviceDetailIndex = -1;
 static int deviceDetailAction = 0;
+static char terminalCommandBuffer[64] = "";
+static char terminalStatusMessage[32] = "";
+static uint32_t terminalStatusTimestamp = 0;
+
+void submitTerminalCommand(const char* command) {
+    if (command == nullptr || command[0] == '\0') {
+        AudioRegistry::play("error");
+        return;
+    }
+
+    connectionLogAddf("> %s", command);
+
+    ILITEModule* module = ILITE.getActiveModule();
+    if (module != nullptr && module->hasCommandProcessor()) {
+        module->handleCommand(command);
+        strncpy(terminalStatusMessage, "Sent to module", sizeof(terminalStatusMessage));
+        terminalStatusMessage[sizeof(terminalStatusMessage) - 1] = '\0';
+        AudioRegistry::play("paired");
+    } else {
+        connectionLogAdd("[Terminal] No module command handler");
+        strncpy(terminalStatusMessage, "No handler", sizeof(terminalStatusMessage));
+        terminalStatusMessage[sizeof(terminalStatusMessage) - 1] = '\0';
+        AudioRegistry::play("error");
+    }
+    terminalStatusTimestamp = millis();
+}
+
+void promptTerminalCommand() {
+    if (StringBuilder::isActive()) {
+        return;
+    }
+
+    StringBuilderConfig cfg;
+    cfg.title = "Terminal Command";
+    cfg.subtitle = "Encoder = type, BTN3 = OK";
+    cfg.initialValue = terminalCommandBuffer;
+    cfg.maxLength = sizeof(terminalCommandBuffer) - 1;
+    cfg.onSubmit = [](const char* value) {
+        if (value) {
+            strncpy(terminalCommandBuffer, value, sizeof(terminalCommandBuffer));
+            terminalCommandBuffer[sizeof(terminalCommandBuffer) - 1] = '\0';
+            submitTerminalCommand(terminalCommandBuffer);
+        }
+    };
+    cfg.onCancel = []() {
+        AudioRegistry::play("edit_cancel");
+    };
+
+    if (StringBuilder::begin(cfg)) {
+        AudioRegistry::play("edit_start");
+    } else {
+        AudioRegistry::play("error");
+    }
+}
 
 // ============================================================================
 // Public API - Screen Management
@@ -137,24 +194,20 @@ void renderTerminalScreen(DisplayCanvas& canvas) {
     const int startY = 14;  // Below top strip
     const int lineHeight = 7;  // Tiny font line height
     const int maxCharsPerLine = 30;  // TINY font is 4px wide, 128/4 = 32, use 30 for margin
-    const int maxY = 64;  // Screen height
+    const int logAreaBottom = 50;
+    const uint32_t now = millis();
 
     // Get connection log entries
     const int logCount = connectionLogGetCount();
 
     canvas.setFont(DisplayCanvas::TINY);
 
-    if (logCount == 0) {
-        canvas.drawText(2, startY, "No log entries yet");
-        return;
-    }
-
     int y = startY;
     int linesDisplayed = 0;
     int linesToSkip = scrollOffset;  // Number of wrapped lines to skip
 
     // Show newest entries first (reverse order)
-    for (int i = logCount - 1; i >= 0 && y < maxY; i--) {
+    for (int i = logCount - 1; i >= 0 && y < logAreaBottom; i--) {
         const char* entry = connectionLogGetEntry(i);
         if (!entry || entry[0] == '\0') continue;
 
@@ -162,7 +215,7 @@ void renderTerminalScreen(DisplayCanvas& canvas) {
         int entryLen = strlen(entry);
         int startPos = 0;
 
-        while (startPos < entryLen && y < maxY) {
+        while (startPos < entryLen && y < logAreaBottom) {
             // Find end of this line (word wrap)
             int lineLen = maxCharsPerLine;
             if (startPos + lineLen > entryLen) {
@@ -198,6 +251,24 @@ void renderTerminalScreen(DisplayCanvas& canvas) {
             startPos += lineLen;
         }
     }
+
+    if (logCount == 0 && y < logAreaBottom) {
+        canvas.drawText(2, y, "No log entries yet");
+        y += lineHeight;
+    }
+
+    // Status line
+    if (terminalStatusMessage[0] != '\0' && (now - terminalStatusTimestamp) < 4000) {
+        canvas.drawText(2, 54, terminalStatusMessage);
+    } else {
+        canvas.drawText(2, 54, "Press encoder to enter command");
+    }
+
+    // Command preview
+    canvas.drawHLine(0, 57, 128);
+    canvas.drawText(2, 63, "CMD:");
+    const char* preview = terminalCommandBuffer[0] ? terminalCommandBuffer : "<press encoder>";
+    canvas.drawText(35, 63, preview);
 }
 
 void renderDevicesScreen(DisplayCanvas& canvas) {
@@ -429,8 +500,7 @@ void handleEncoderPress() {
     // Handle encoder press based on active screen
     switch (currentScreen) {
         case ActiveScreen::TERMINAL:
-            // Close terminal on encoder press
-            closeActiveScreen();
+            promptTerminalCommand();
             break;
 
         case ActiveScreen::DEVICES:

@@ -11,6 +11,7 @@
 #include <esp_now.h>
 #include <ArduinoOTA.h>
 #include <Wire.h>
+#include <cstring>
 
 // Extension systems (optional)
 #include "IconLibrary.h"
@@ -65,6 +66,8 @@ ILITEFramework::ILITEFramework()
       frameworkEngine_(&FrameworkEngine::getInstance())
 {
     instance_ = this;
+    wifiSSIDBuffer_[0] = '\0';
+    wifiPasswordBuffer_[0] = '\0';
 }
 
 // ============================================================================
@@ -75,6 +78,7 @@ bool ILITEFramework::begin(const ILITEConfig& config) {
     // Store configuration
     config_ = config;
     bootTime_ = millis();
+    initializeWiFiCredentials();
 
     Serial.println("=====================================");
     Serial.println("   ILITE Framework v1.0.0");
@@ -653,4 +657,105 @@ uint32_t ILITEFramework::getPacketTxCount() const {
 
 uint32_t ILITEFramework::getPacketRxCount() const {
     return packetRxCount_;
+}
+
+// ============================================================================
+// WiFi Credential Management
+// ============================================================================
+
+const char* ILITEFramework::getWiFiSSID() const {
+    return wifiSSIDBuffer_;
+}
+
+const char* ILITEFramework::getWiFiPassword() const {
+    return wifiPasswordBuffer_;
+}
+
+bool ILITEFramework::updateWiFiCredentials(const char* ssid, const char* password, bool persist) {
+    if (ssid == nullptr || password == nullptr) {
+        return false;
+    }
+
+    auto copyString = [](char* dest, size_t maxLen, const char* src) {
+        if (maxLen == 0 || dest == nullptr) {
+            return;
+        }
+        if (src == nullptr) {
+            dest[0] = '\0';
+            return;
+        }
+        strncpy(dest, src, maxLen);
+        dest[maxLen] = '\0';
+    };
+
+    copyString(wifiSSIDBuffer_, WIFI_SSID_MAX_LEN, ssid);
+    copyString(wifiPasswordBuffer_, WIFI_PASSWORD_MAX_LEN, password);
+
+    config_.wifiSSID = wifiSSIDBuffer_;
+    config_.wifiPassword = wifiPasswordBuffer_;
+
+    if (persist) {
+        persistWiFiCredentials();
+    }
+
+    if (initialized_ && config_.enableOTA) {
+        WiFi.softAPdisconnect(true);
+        WiFi.softAP(wifiSSIDBuffer_, wifiPasswordBuffer_);
+    }
+
+    Logger::getInstance().logf("[WiFi] Credentials updated (SSID=%s)", wifiSSIDBuffer_);
+    return true;
+}
+
+void ILITEFramework::initializeWiFiCredentials() {
+    auto copyString = [](char* dest, size_t maxLen, const char* src) {
+        if (maxLen == 0 || dest == nullptr) {
+            return;
+        }
+        if (src == nullptr) {
+            dest[0] = '\0';
+            return;
+        }
+        strncpy(dest, src, maxLen);
+        dest[maxLen] = '\0';
+    };
+
+    copyString(wifiSSIDBuffer_, WIFI_SSID_MAX_LEN, config_.wifiSSID ? config_.wifiSSID : "");
+    copyString(wifiPasswordBuffer_, WIFI_PASSWORD_MAX_LEN, config_.wifiPassword ? config_.wifiPassword : "");
+    loadWiFiCredentialsFromPrefs();
+    config_.wifiSSID = wifiSSIDBuffer_;
+    config_.wifiPassword = wifiPasswordBuffer_;
+}
+
+void ILITEFramework::loadWiFiCredentialsFromPrefs() {
+    PreferencesManager& prefs = PreferencesManager::getInstance();
+    if (!prefs.begin("wifi", true)) {
+        return;
+    }
+
+    char temp[WIFI_PASSWORD_MAX_LEN + 1];
+    size_t len = prefs.getString("ssid", temp, WIFI_SSID_MAX_LEN + 1, "");
+    if (len > 0) {
+        strncpy(wifiSSIDBuffer_, temp, WIFI_SSID_MAX_LEN);
+        wifiSSIDBuffer_[WIFI_SSID_MAX_LEN] = '\0';
+    }
+
+    len = prefs.getString("password", temp, WIFI_PASSWORD_MAX_LEN + 1, "");
+    if (len > 0) {
+        strncpy(wifiPasswordBuffer_, temp, WIFI_PASSWORD_MAX_LEN);
+        wifiPasswordBuffer_[WIFI_PASSWORD_MAX_LEN] = '\0';
+    }
+
+    prefs.end();
+}
+
+void ILITEFramework::persistWiFiCredentials() {
+    PreferencesManager& prefs = PreferencesManager::getInstance();
+    if (!prefs.begin("wifi", false)) {
+        return;
+    }
+
+    prefs.putString("ssid", wifiSSIDBuffer_);
+    prefs.putString("password", wifiPasswordBuffer_);
+    prefs.end();
 }

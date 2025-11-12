@@ -14,11 +14,15 @@
 #include "DefaultActions.h"
 #include "IconLibrary.h"
 #include "InputManager.h"
+#include "StringBuilder.h"
+#include "ILITE.h"
 #include "ControlBindingSystem.h"
 #include "input.h"
 #include <WiFi.h>
 #include <algorithm>
 #include <cstring>
+#include <vector>
+#include <string>
 
 // ============================================================================
 // Singleton Instance
@@ -245,6 +249,83 @@ void FrameworkEngine::registerDefaultMenuEntries() {
     espnow.isReadOnly = true;
     espnow.customDraw = nullptr;
     MenuRegistry::registerEntry(espnow);
+
+    // Network submenu entries (SSID / Password)
+    MenuEntry wifiSSID;
+    wifiSSID.id = "framework.network.ssid";
+    wifiSSID.parent = MENU_NETWORK;
+    wifiSSID.icon = ICON_SIGNAL_FULL;
+    wifiSSID.label = "WiFi SSID";
+    wifiSSID.shortLabel = nullptr;
+    wifiSSID.priority = 0;
+    wifiSSID.isSubmenu = false;
+    wifiSSID.isToggle = false;
+    wifiSSID.isEditableString = true;
+    wifiSSID.maxStringLength = ILITEFramework::WIFI_SSID_MAX_LEN;
+    wifiSSID.getStringValueForEdit = [](char* buffer, size_t length) {
+        if (buffer == nullptr || length == 0) {
+            return;
+        }
+        const char* ssid = ILITE.getWiFiSSID();
+        if (ssid == nullptr) {
+            ssid = "";
+        }
+        strncpy(buffer, ssid, length);
+        buffer[length - 1] = '\0';
+    };
+    wifiSSID.setStringValue = [](const char* value) {
+        if (!value) {
+            return;
+        }
+        ILITE.updateWiFiCredentials(value, ILITE.getWiFiPassword());
+    };
+    wifiSSID.getValue = []() -> const char* {
+        static char ssid[ILITEFramework::WIFI_SSID_MAX_LEN + 1];
+        const char* current = ILITE.getWiFiSSID();
+        if (!current) current = "";
+        strncpy(ssid, current, sizeof(ssid));
+        ssid[sizeof(ssid) - 1] = '\0';
+        return ssid;
+    };
+    MenuRegistry::registerEntry(wifiSSID);
+
+    MenuEntry wifiPassword;
+    wifiPassword.id = "framework.network.password";
+    wifiPassword.parent = MENU_NETWORK;
+    wifiPassword.icon = ICON_SIGNAL_MED;
+    wifiPassword.label = "WiFi Password";
+    wifiPassword.shortLabel = nullptr;
+    wifiPassword.priority = 5;
+    wifiPassword.isSubmenu = false;
+    wifiPassword.isToggle = false;
+    wifiPassword.isEditableString = true;
+    wifiPassword.maxStringLength = ILITEFramework::WIFI_PASSWORD_MAX_LEN;
+    wifiPassword.getStringValueForEdit = [](char* buffer, size_t length) {
+        if (buffer == nullptr || length == 0) {
+            return;
+        }
+        const char* pwd = ILITE.getWiFiPassword();
+        if (!pwd) pwd = "";
+        strncpy(buffer, pwd, length);
+        buffer[length - 1] = '\0';
+    };
+    wifiPassword.setStringValue = [](const char* value) {
+        if (!value) {
+            return;
+        }
+        ILITE.updateWiFiCredentials(ILITE.getWiFiSSID(), value);
+    };
+    wifiPassword.getValue = []() -> const char* {
+        static char masked[ILITEFramework::WIFI_PASSWORD_MAX_LEN + 1];
+        const char* pwd = ILITE.getWiFiPassword();
+        if (!pwd) pwd = "";
+        size_t len = strlen(pwd);
+        size_t maskLen = std::min(len, sizeof(masked) - 1);
+        memset(masked, '*', maskLen);
+        masked[maskLen] = '\0';
+        return masked;
+    };
+    MenuRegistry::registerEntry(wifiPassword);
 
     // Deactivate Module entry (under Modules submenu)
     MenuEntry deactivateModule;
@@ -951,6 +1032,13 @@ void FrameworkEngine::activateMenuSelection() {
         return;
     }
 
+    if (entry->isEditableString) {
+        if (!beginStringEdit(entry)) {
+            AudioRegistry::play("error");
+        }
+        return;
+    }
+
     // For now, just execute callback
     if (entry->onSelect) {
         entry->onSelect();
@@ -1443,23 +1531,41 @@ void FrameworkEngine::convertModuleMenuItems(const ModuleMenuItem& parent, MenuI
                 };
                 break;
 
-            case ModuleMenuItem::Type::EditableFloat:
-                entry.isSubmenu = false;
-                entry.isToggle = false;
-                entry.isEditableFloat = true;
-                entry.getFloatValue = item.getFloatValue;
-                entry.setFloatValue = item.setFloatValue;
-                entry.minValueFloat = item.minValueFloat;
-                entry.maxValueFloat = item.maxValueFloat;
-                entry.step = item.step;
-                entry.coarseStep = item.coarseStep;
-                // Auto-generate getValue function to display current value
-                entry.getValue = [item]() -> const char* {
-                    static char buffer[32];
-                    snprintf(buffer, sizeof(buffer), "%.2f", item.getFloatValue());
-                    return buffer;
-                };
-                break;
+        case ModuleMenuItem::Type::EditableFloat:
+            entry.isSubmenu = false;
+            entry.isToggle = false;
+            entry.isEditableFloat = true;
+            entry.getFloatValue = item.getFloatValue;
+            entry.setFloatValue = item.setFloatValue;
+            entry.minValueFloat = item.minValueFloat;
+            entry.maxValueFloat = item.maxValueFloat;
+            entry.step = item.step;
+            entry.coarseStep = item.coarseStep;
+            // Auto-generate getValue function to display current value
+            entry.getValue = [item]() -> const char* {
+                static char buffer[32];
+                snprintf(buffer, sizeof(buffer), "%.2f", item.getFloatValue());
+                return buffer;
+            };
+            break;
+
+        case ModuleMenuItem::Type::EditableString:
+            entry.isSubmenu = false;
+            entry.isToggle = false;
+            entry.isEditableString = true;
+            entry.maxStringLength = item.maxStringLength > 0 ? item.maxStringLength : 32;
+            entry.getStringValueForEdit = item.getStringValue;
+            entry.setStringValue = item.setStringValue;
+            entry.getValue = [item]() -> const char* {
+                static char buffer[64];
+                if (item.getStringValue) {
+                    item.getStringValue(buffer, sizeof(buffer));
+                } else {
+                    buffer[0] = '\0';
+                }
+                return buffer;
+            };
+            break;
         }
 
         // Set visibility condition
@@ -1478,6 +1584,43 @@ void FrameworkEngine::convertModuleMenuItems(const ModuleMenuItem& parent, MenuI
         }
     }
 }
+
+bool FrameworkEngine::beginStringEdit(const MenuEntry* entry) {
+    if (entry == nullptr || !entry->isEditableString ||
+        entry->getStringValueForEdit == nullptr || entry->setStringValue == nullptr) {
+        return false;
+    }
+
+    size_t maxLen = entry->maxStringLength > 0 ? entry->maxStringLength : 32;
+    std::vector<char> buffer(maxLen + 1, 0);
+    entry->getStringValueForEdit(buffer.data(), buffer.size());
+    buffer[buffer.size() - 1] = '\0';
+
+    std::string initialValue(buffer.data());
+
+    StringBuilderConfig cfg;
+    cfg.title = entry->label ? entry->label : "Edit Text";
+    cfg.subtitle = "Rotate to type, press to save";
+    cfg.initialValue = initialValue.c_str();
+    cfg.maxLength = maxLen;
+    cfg.onSubmit = [entry](const char* value) {
+        if (entry->setStringValue) {
+            entry->setStringValue(value);
+            AudioRegistry::play("edit_save");
+        }
+    };
+    cfg.onCancel = []() {
+        AudioRegistry::play("edit_cancel");
+    };
+
+    if (StringBuilder::begin(cfg)) {
+        return true;
+    }
+
+    AudioRegistry::play("error");
+    return false;
+}
+
 void FrameworkEngine::drawBlinkUnderline(DisplayCanvas& canvas, int16_t x, int16_t y, int16_t width) {
     if (width <= 0) {
         return;

@@ -30,6 +30,10 @@ static MenuEntry makeMenuEntry(
     entry.getToggleState = getToggleState;
     entry.isReadOnly = isReadOnly;
     entry.customDraw = customDraw;
+    entry.isEditableString = false;
+    entry.maxStringLength = 0;
+    entry.getStringValueForEdit = nullptr;
+    entry.setStringValue = nullptr;
     // Editable value fields use defaults from struct definition
     return entry;
 }

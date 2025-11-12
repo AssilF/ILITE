@@ -69,6 +69,12 @@ ILITE/
   - `CANCEL` (or pressing when the device disappeared) drops back to the list with a back-tone.
 - Gives operators a confirmation step plus device context before pairing.
 
+@subsection string_builder On-Device Keyboard & Text Editing
+- Added `StringBuilder` (screen + helper) so any menu/screen can capture text with the encoder + buttons. It renders a software keyboard, highlights the active key, and blinks a cursor while typing.
+- `MenuEntry`/`ModuleMenu` gained string-editable support, allowing settings (e.g., Wi-Fi SSID/password) and modules to expose text fields without reimplementing UI.
+- Wi-Fi credentials now live in NVS; editing them from the Network menu immediately restarts the OTA soft-AP with the new SSID/password.
+- The Terminal screen includes a command prompt (press the encoder). Commands are logged and routed to the active module’s `handleCommand()` implementation so modules can expose CLI verbs easily.
+
 @section modules Writing Modules
 @subsection essentials Minimal Skeleton
 ```cpp

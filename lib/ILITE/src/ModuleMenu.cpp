@@ -139,6 +139,26 @@ ModuleMenuItem& ModuleMenuBuilder::addEditableFloat(const std::string& id,
     return appendItem(resolveParent(parent), std::move(item));
 }
 
+ModuleMenuItem& ModuleMenuBuilder::addEditableString(const std::string& id,
+                                                     const std::string& label,
+                                                     std::function<void(char*, size_t)> getValue,
+                                                     std::function<void(const char*)> setValue,
+                                                     size_t maxLength,
+                                                     IconID icon,
+                                                     ModuleMenuItem* parent,
+                                                     int priority) {
+    ModuleMenuItem item;
+    item.id = id;
+    item.label = label;
+    item.icon = icon;
+    item.type = ModuleMenuItem::Type::EditableString;
+    item.priority = priority;
+    item.getStringValue = std::move(getValue);
+    item.setStringValue = std::move(setValue);
+    item.maxStringLength = maxLength;
+    return appendItem(resolveParent(parent), std::move(item));
+}
+
 ModuleMenuItem& ModuleMenuBuilder::appendItem(ModuleMenuItem& parent, ModuleMenuItem item) {
     parent.children.emplace_back(std::move(item));
 
