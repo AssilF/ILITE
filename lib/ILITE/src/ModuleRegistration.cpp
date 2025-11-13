@@ -580,9 +580,9 @@ private:
     void drawStatusTag(DisplayCanvas& canvas, int x, int y, const char* label, bool active) {
         const int width = 24;
         const int height = 9;
-        canvas.drawRFrame(x, y, width, height, 2);
+        canvas.drawRoundRect(x, y, width, height, 2,0);
         if (active) {
-            canvas.drawBox(x + 1, y + 1, width - 2, height - 2);
+            canvas.drawRect(x + 1, y + 1, width - 2, height - 2,0);
             canvas.setDrawColor(2);
         }
         canvas.drawText(x + 3, y + height - 2, label);
