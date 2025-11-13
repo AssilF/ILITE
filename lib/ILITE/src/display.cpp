@@ -198,23 +198,20 @@ int getLogMaxScrollOffset() {
   return 0;
 }
 
-static const char* modeToString(GillMode mode){
-  switch(mode){
-    case GillMode::Differential: return "Differential";
-    case GillMode::Default:
-    default: return "Default";
+static const char* profileToString(GillDriveProfile profile){
+  switch(profile){
+    case GillDriveProfile::Differential: return "Differential";
+    case GillDriveProfile::Tank:
+    default: return "Tank";
   }
 }
 
-static const char* easingToString(GillEasing easing){
+static const char* easingToString(GillDriveEasing easing){
   switch(easing){
-    case GillEasing::None: return "None";
-    case GillEasing::Linear: return "Linear";
-    case GillEasing::EaseIn: return "Ease In";
-    case GillEasing::EaseOut: return "Ease Out";
-    case GillEasing::EaseInOut: return "Ease InOut";
-    case GillEasing::Sine:
-    default: return "Sine";
+    case GillDriveEasing::None: return "None";
+    case GillDriveEasing::SlewRate: return "Slew";
+    case GillDriveEasing::Exponential:
+    default: return "Exponential";
   }
 }
 
@@ -584,6 +581,10 @@ void drawPacketVariables(){
     oled.setCursor(0, y);      oled.print("Brake:"); oled.print(thegillRuntime.brakeActive ? "ON" : "OFF");
     y += 8;
     oled.setCursor(0, y);      oled.print("Honk:");  oled.print(thegillRuntime.honkActive ? "ON" : "OFF");
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Batt:");  oled.print(thegillRuntime.batteryMillivolts);
+    y += 8;
+    oled.setCursor(0, y);      oled.print("Pump:");  oled.print(thegillRuntime.pumpDuty);
   } else {
     drawHeader("Packet Vars");
     int y = 18;
@@ -624,7 +625,7 @@ void drawModeSummary(){
       y += 10;
     }
   } else if(kind == PeerKind::Thegill){
-    oled.setCursor(0, y);      oled.print("Mode: ");  oled.print(modeToString(thegillConfig.mode));
+    oled.setCursor(0, y);      oled.print("Mode: ");  oled.print(profileToString(thegillConfig.profile));
     y += 10;
     oled.setCursor(0, y);      oled.print("Easing: ");oled.print(easingToString(thegillConfig.easing));
     y += 10;
@@ -1039,9 +1040,9 @@ void drawThegillDashboard(){
   oled.clearBuffer();
   oled.setFont(smallFont);
   int16_t top = kStatusBarHeight + 4;
-  oled.setCursor(0, top);         oled.print("Mode: "); oled.print(modeToString(thegillConfig.mode));
+  oled.setCursor(0, top);         oled.print("Mode: "); oled.print(profileToString(thegillConfig.profile));
   oled.setCursor(0, top + 8);     oled.print("Ease: "); oled.print(easingToString(thegillConfig.easing));
-  oled.setCursor(0, top + 16);    oled.print("Rate: "); oled.print(thegillRuntime.easingRate, 1);
+  oled.setCursor(0, top + 16);    oled.print("Strength: "); oled.print(thegillConfig.easingRate, 2);
 
 
   float leftTarget = (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear) * 0.5f;
@@ -1070,7 +1071,7 @@ void drawThegillConfig(){
   oled.setFont(smallFont);
   const char* labels[] = {"Mode", "Easing", "Back"};
   const char* values[] = {
-    modeToString(thegillConfig.mode),
+    profileToString(thegillConfig.profile),
     easingToString(thegillConfig.easing),
     ""};
   for(int i = 0; i < 3; ++i){

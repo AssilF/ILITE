@@ -89,24 +89,36 @@ public:
     size_t getDetectionKeywordCount() const override { return 3; }
     const uint8_t* getLogo32x32() const override { return thegill_logo_32x32; }
 
-    size_t getCommandPacketTypeCount() const override { return 2; }
+    size_t getCommandPacketTypeCount() const override { return 4; }
     PacketDescriptor getCommandPacketDescriptor(size_t index) const override {
         if (index == 0) {
             return {"TheGill Command", THEGILL_PACKET_MAGIC, sizeof(ThegillCommand),
                     sizeof(ThegillCommand), true, nullptr, 0};
         }
         if (index == 1) {
+            return {"Peripheral Command", THEGILL_PERIPHERAL_MAGIC, sizeof(PeripheralCommand),
+                    sizeof(PeripheralCommand), true, nullptr, 0};
+        }
+        if (index == 2) {
+            return {"Configuration Packet", THEGILL_CONFIG_MAGIC, sizeof(ConfigurationPacket),
+                    sizeof(ConfigurationPacket), true, nullptr, 0};
+        }
+        if (index == 3) {
             return {"Arm Command", ARM_COMMAND_MAGIC, sizeof(ArmControlCommand),
                     sizeof(ArmControlCommand), true, nullptr, 0};
         }
         return {};
     }
 
-    size_t getTelemetryPacketTypeCount() const override { return 1; }
+    size_t getTelemetryPacketTypeCount() const override { return 2; }
     PacketDescriptor getTelemetryPacketDescriptor(size_t index) const override {
         if (index == 0) {
-            return {"TheGill Telemetry", THEGILL_PACKET_MAGIC, sizeof(ThegillTelemetryPacket),
-                    sizeof(ThegillTelemetryPacket), true, nullptr, 0};
+            return {"Status Packet", THEGILL_STATUS_MAGIC, sizeof(StatusPacket),
+                    sizeof(StatusPacket), true, nullptr, 0};
+        }
+        if (index == 1) {
+            return {"Arm State Packet", THEGILL_ARM_STATE_MAGIC, sizeof(ArmStatePacket),
+                    sizeof(ArmStatePacket), true, nullptr, 0};
         }
         return {};
     }
@@ -123,7 +135,7 @@ public:
 
         if (cmd == "status") {
             connectionLogAddf("[TheGill] Mode=%s, Mech Mode=%d",
-                              modeLabel(thegillConfig.mode),
+                              profileLabel(thegillConfig.profile),
                               static_cast<int>(mechIaneMode));
             return;
         }
@@ -162,47 +174,19 @@ public:
     }
 
     void onInit() override {
-        thegillCommand.magic = THEGILL_PACKET_MAGIC;
-        thegillCommand.leftFront = 0;
-        thegillCommand.leftRear = 0;
-        thegillCommand.rightFront = 0;
-        thegillCommand.rightRear = 0;
-        thegillCommand.flags = 0;
-        thegillCommand.mode = GillMode::Default;
-        thegillCommand.easing = kDefaultGillEasing;
-        thegillCommand.easingRate = 4.0f;
-
-        thegillConfig.mode = GillMode::Default;
-        thegillConfig.easing = kDefaultGillEasing;
-
-        thegillRuntime.targetLeftFront = 0.0f;
-        thegillRuntime.targetLeftRear = 0.0f;
-        thegillRuntime.targetRightFront = 0.0f;
-        thegillRuntime.targetRightRear = 0.0f;
-        thegillRuntime.actualLeftFront = 0.0f;
-        thegillRuntime.actualLeftRear = 0.0f;
-        thegillRuntime.actualRightFront = 0.0f;
-        thegillRuntime.actualRightRear = 0.0f;
-        thegillRuntime.easingRate = thegillCommand.easingRate;
-        thegillRuntime.brakeActive = false;
-        thegillRuntime.honkActive = false;
-
+        onThegillUnpaired();
+        markThegillConfigDirty();
         Serial.println("[TheGillModule] Initialized");
     }
 
     void onPair() override {
         Serial.println("[TheGillModule] Paired");
+        onThegillPaired();
     }
 
     void onUnpair() override {
         Serial.println("[TheGillModule] Unpaired");
-        thegillCommand.leftFront = 0;
-        thegillCommand.leftRear = 0;
-        thegillCommand.rightFront = 0;
-        thegillCommand.rightRear = 0;
-        thegillCommand.flags = 0;
-        thegillRuntime.brakeActive = false;
-        thegillRuntime.honkActive = false;
+        onThegillUnpaired();
     }
 
     void updateControl(const InputManager& inputs, float dt) override {
@@ -213,23 +197,53 @@ public:
     }
 
     size_t prepareCommandPacket(size_t typeIndex, uint8_t* buffer, size_t bufferSize) override {
-        if (typeIndex == 0 && bufferSize >= sizeof(ThegillCommand)) {
-            memcpy(buffer, &thegillCommand, sizeof(ThegillCommand));
-            return sizeof(ThegillCommand);
-        }
-        if (typeIndex == 1 && bufferSize >= sizeof(ArmControlCommand)) {
-            // Only send arm command when in arm mode
-            if (mechIaneMode != MechIaneMode::DriveMode) {
-                memcpy(buffer, &armCommand, sizeof(ArmControlCommand));
-                return sizeof(ArmControlCommand);
-            }
+        switch (typeIndex) {
+            case 0:
+                if (bufferSize >= sizeof(ThegillCommand)) {
+                    memcpy(buffer, &thegillCommand, sizeof(ThegillCommand));
+                    return sizeof(ThegillCommand);
+                }
+                break;
+            case 1:
+                if (bufferSize >= sizeof(PeripheralCommand)) {
+                    PeripheralCommand pkt{};
+                    if (acquirePeripheralCommand(pkt)) {
+                        memcpy(buffer, &pkt, sizeof(PeripheralCommand));
+                        return sizeof(PeripheralCommand);
+                    }
+                }
+                break;
+            case 2:
+                if (bufferSize >= sizeof(ConfigurationPacket)) {
+                    ConfigurationPacket pkt{};
+                    if (acquireConfigurationPacket(pkt)) {
+                        memcpy(buffer, &pkt, sizeof(ConfigurationPacket));
+                        return sizeof(ConfigurationPacket);
+                    }
+                }
+                break;
+            case 3:
+                if (bufferSize >= sizeof(ArmControlCommand)) {
+                    ArmControlCommand pkt{};
+                    if (acquireArmCommand(pkt)) {
+                        memcpy(buffer, &pkt, sizeof(ArmControlCommand));
+                        return sizeof(ArmControlCommand);
+                    }
+                }
+                break;
         }
         return 0;
     }
 
     void handleTelemetry(size_t typeIndex, const uint8_t* data, size_t length) override {
-        if (typeIndex == 0 && length >= sizeof(ThegillTelemetryPacket)) {
-            memcpy(&thegillTelemetryPacket, data, sizeof(ThegillTelemetryPacket));
+        if (typeIndex == 0 && length >= sizeof(StatusPacket)) {
+            StatusPacket pkt;
+            memcpy(&pkt, data, sizeof(StatusPacket));
+            processStatusPacket(pkt);
+        } else if (typeIndex == 1 && length >= sizeof(ArmStatePacket)) {
+            ArmStatePacket pkt;
+            memcpy(&pkt, data, sizeof(ArmStatePacket));
+            processArmStatePacket(pkt);
         }
     }
 
@@ -256,37 +270,29 @@ public:
             const char* modeText = (mechIaneMode == MechIaneMode::ArmXYZ) ? "ARM: XYZ" : "ARM: ORI";
             canvas.drawText(0, top, modeText);
         } else {
-            // Normal drive mode dashboard
             canvas.setFont(DisplayCanvas::SMALL);
+            canvas.drawTextF(0, top, "Profile:%s", profileLabel(thegillConfig.profile));
+            canvas.drawTextF(0, top + 8, "Input:%s", easingLabel(thegillConfig.easing));
+            canvas.drawTextF(0, top + 16, "Battery:%u mV", thegillRuntime.batteryMillivolts);
 
-            // Top info line: Mode, Easing, Rate
-            canvas.drawTextF(0, top, "Mode: %s", modeLabel(thegillConfig.mode));
-            canvas.drawTextF(0, top + 8, "Ease: %s", easingLabel(thegillConfig.easing));
-            canvas.drawTextF(0, top + 16, "Rate: %.1f", thegillRuntime.easingRate);
+            const float leftTarget = 0.5f * (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear);
+            const float rightTarget = 0.5f * (thegillRuntime.targetRightFront + thegillRuntime.targetRightRear);
+            const float leftActual = 0.5f * (thegillRuntime.actualLeftFront + thegillRuntime.actualLeftRear);
+            const float rightActual = 0.5f * (thegillRuntime.actualRightFront + thegillRuntime.actualRightRear);
 
-            // Convert command values (int16_t -32767 to 32767) to float (-1.0 to 1.0)
-            float leftFrontCmd = thegillCommand.leftFront / 32767.0f;
-            float leftRearCmd = thegillCommand.leftRear / 32767.0f;
-            float rightFrontCmd = thegillCommand.rightFront / 32767.0f;
-            float rightRearCmd = thegillCommand.rightRear / 32767.0f;
+            drawMotorBar(canvas, 40, top + 24, leftActual, leftTarget);
+            drawMotorBarLabels(canvas, 40, top + 24, leftTarget, leftActual);
+            drawMotorBar(canvas, 40, top + 38, rightActual, rightTarget);
+            drawMotorBarLabels(canvas, 40, top + 38, rightTarget, rightActual);
 
-            float leftAvg = (leftFrontCmd + leftRearCmd) * 0.5f;
-            float rightAvg = (rightFrontCmd + rightRearCmd) * 0.5f;
+            const bool linked = (thegillRuntime.statusFlags & StatusFlag::PairedLink) != 0;
+            drawStatusTag(canvas, 102, top, "DRV", thegillRuntime.driveEnabled);
+            drawStatusTag(canvas, 102, top + 10, "ARM", thegillRuntime.armOutputsEnabled);
+            drawStatusTag(canvas, 102, top + 20, "TEL", thegillRuntime.telemetryEnabled);
+            drawStatusTag(canvas, 102, top + 30, "FS", thegillRuntime.failsafeEnabled);
+            drawStatusTag(canvas, 102, top + 40, "LNK", linked);
 
-            // Left motor bar
-            canvas.drawText(0, top + 26, "Left");
-            drawMotorBar(canvas, 40, top + 20, leftAvg, leftAvg);
-            drawMotorBarLabels(canvas, 40, top + 20, "LF", leftFrontCmd, "LR", leftRearCmd);
-
-            // Right motor bar
-            canvas.drawText(0, top + 40, "Right");
-            drawMotorBar(canvas, 40, top + 34, rightAvg, rightAvg);
-            drawMotorBarLabels(canvas, 40, top + 34, "RF", rightFrontCmd, "RR", rightRearCmd);
-
-            // Status indicators (top right)
-            const InputManager& inputs = InputManager::getInstance();
-            canvas.drawText(96, top, inputs.getButton1() ? "BRK" : "   ");
-            canvas.drawText(96, top + 8, inputs.getButton2() ? "HNK" : "   ");
+            canvas.drawTextF(0, top + 52, "Age:%ums Pump:%u", thegillRuntime.commandAgeMs, thegillRuntime.pumpDuty);
         }
     }
 
@@ -294,32 +300,28 @@ public:
         builder.clear();
         ModuleMenuItem& root = builder.root();
 
-        ModuleMenuItem& modeMenu = builder.addSubmenu("thegill.mode", "Drive Mode", ICON_ROBOT, &root);
-        addModeEntry(builder, modeMenu, GillMode::Default, "Tank Drive");
-        addModeEntry(builder, modeMenu, GillMode::Differential, "Differential");
+        ModuleMenuItem& profileMenu = builder.addSubmenu("thegill.profile", "Drive Profile", ICON_ROBOT, &root);
+        addProfileEntry(builder, profileMenu, GillDriveProfile::Tank, "Tank Drive");
+        addProfileEntry(builder, profileMenu, GillDriveProfile::Differential, "Differential");
 
-        ModuleMenuItem& easingMenu = builder.addSubmenu("thegill.easing", "Easing Curve", ICON_TUNING, &root);
-        addEasingEntry(builder, easingMenu, GillEasing::None, "None");
-        addEasingEntry(builder, easingMenu, GillEasing::Linear, "Linear");
-        addEasingEntry(builder, easingMenu, GillEasing::EaseIn, "Ease In");
-        addEasingEntry(builder, easingMenu, GillEasing::EaseOut, "Ease Out");
-        addEasingEntry(builder, easingMenu, GillEasing::EaseInOut, "Ease In/Out");
-        addEasingEntry(builder, easingMenu, GillEasing::Sine, "Sine");
+        ModuleMenuItem& easingMenu = builder.addSubmenu("thegill.easing", "Input Shaping", ICON_TUNING, &root);
+        addEasingEntry(builder, easingMenu, GillDriveEasing::None, "None");
+        addEasingEntry(builder, easingMenu, GillDriveEasing::SlewRate, "Slew Rate");
+        addEasingEntry(builder, easingMenu, GillDriveEasing::Exponential, "Exponential");
 
-        // Easing rate adjustment - editable value
         builder.addEditableFloat(
             "thegill.rate.edit",
-            "Easing Rate",
-            []() { return thegillRuntime.easingRate; },
+            "Easing Strength",
+            []() { return thegillConfig.easingRate; },
             [](float val) {
-                thegillRuntime.easingRate = val;
-                thegillCommand.easingRate = val;
-                Serial.printf("[TheGill] Easing rate set to: %.1f\n", val);
+                thegillConfig.easingRate = constrain(val, 0.0f, 1.0f);
+                markThegillConfigDirty();
+                Serial.printf("[TheGill] Easing strength: %.2f\n", thegillConfig.easingRate);
             },
-            0.5f,   // min value
-            20.0f,  // max value
-            0.1f,   // fine step
-            0.5f,   // coarse step
+            0.0f,
+            1.0f,
+            0.05f,
+            0.1f,
             ICON_TUNING,
             &root);
 
@@ -405,6 +407,36 @@ public:
             },
             ICON_SETTINGS,
             &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.orbit",
+            "Orbit High",
+            []() {
+                armCameraView = ArmCameraView::OrbitHigh;
+                Serial.println("[TheGill] Camera: Orbit High");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.shoulder",
+            "Shoulder Close",
+            []() {
+                armCameraView = ArmCameraView::ShoulderClose;
+                Serial.println("[TheGill] Camera: Shoulder Close");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
+
+        builder.addAction(
+            "thegill.camera.rear_quarter",
+            "Rear Quarter",
+            []() {
+                armCameraView = ArmCameraView::RearQuarter;
+                Serial.println("[TheGill] Camera: Rear Quarter");
+            },
+            ICON_SETTINGS,
+            &cameraMenu);
     }
 
 private:
@@ -434,39 +466,36 @@ private:
         thegillRuntime.targetRightRear = right;
     }
 
-    const char* modeLabel(GillMode mode) const {
-        switch (mode) {
-            case GillMode::Default: return "Tank";
-            case GillMode::Differential: return "Differential";
+    const char* profileLabel(GillDriveProfile profile) const {
+        switch (profile) {
+            case GillDriveProfile::Tank: return "Tank";
+            case GillDriveProfile::Differential: return "Differential";
             default: return "Unknown";
         }
     }
 
-    const char* easingLabel(GillEasing easing) const {
+    const char* easingLabel(GillDriveEasing easing) const {
         switch (easing) {
-            case GillEasing::None: return "None";
-            case GillEasing::Linear: return "Linear";
-            case GillEasing::EaseIn: return "Ease In";
-            case GillEasing::EaseOut: return "Ease Out";
-            case GillEasing::EaseInOut: return "Ease In/Out";
-            case GillEasing::Sine: return "Sine";
+            case GillDriveEasing::None: return "None";
+            case GillDriveEasing::SlewRate: return "Slew";
+            case GillDriveEasing::Exponential: return "Expo";
             default: return "Unknown";
         }
     }
 
-    void addModeEntry(ModuleMenuBuilder& builder, ModuleMenuItem& parent, GillMode mode, const char* label) {
+    void addProfileEntry(ModuleMenuBuilder& builder, ModuleMenuItem& parent, GillDriveProfile profile, const char* label) {
         builder.addAction(
             label,
             label,
-            [this, mode]() { setMode(mode); },
+            [this, profile]() { setDriveProfile(profile); },
             ICON_ROBOT,
             &parent,
-            static_cast<int>(mode),
+            static_cast<int>(profile),
             nullptr,
-            [this, mode]() { return thegillConfig.mode == mode ? "Active" : ""; });
+            [this, profile]() { return thegillConfig.profile == profile ? "Active" : ""; });
     }
 
-    void addEasingEntry(ModuleMenuBuilder& builder, ModuleMenuItem& parent, GillEasing easing, const char* label) {
+    void addEasingEntry(ModuleMenuBuilder& builder, ModuleMenuItem& parent, GillDriveEasing easing, const char* label) {
         builder.addAction(
             label,
             label,
@@ -478,21 +507,21 @@ private:
             [this, easing]() { return thegillConfig.easing == easing ? "Active" : ""; });
     }
 
-    void setMode(GillMode mode) {
-        if (thegillConfig.mode == mode) {
+    void setDriveProfile(GillDriveProfile profile) {
+        if (thegillConfig.profile == profile) {
             return;
         }
-        thegillConfig.mode = mode;
-        thegillCommand.mode = mode;
-        Serial.printf("[TheGillModule] Mode set to %d\n", static_cast<int>(mode));
+        thegillConfig.profile = profile;
+        markThegillConfigDirty();
+        Serial.printf("[TheGillModule] Profile set to %d\n", static_cast<int>(profile));
     }
 
-    void setEasing(GillEasing easing) {
+    void setEasing(GillDriveEasing easing) {
         if (thegillConfig.easing == easing) {
             return;
         }
         thegillConfig.easing = easing;
-        thegillCommand.easing = easing;
+        markThegillConfigDirty();
         Serial.printf("[TheGillModule] Easing set to %d\n", static_cast<int>(easing));
     }
 
@@ -509,42 +538,57 @@ private:
         // Draw frame
         canvas.drawRect(x, y, width, height, false);
 
-        // Draw filled portion for actual value
-        int actualPixels = static_cast<int>(roundf(constrain(actual, -1.0f, 1.0f) * range));
+        const int actualPixels = static_cast<int>(roundf(constrain(actual, -1.0f, 1.0f) * range));
         if (actualPixels >= 0) {
-            canvas.drawRect(mid, y + 1, actualPixels, height - 2, true);  // Filled rect
+            canvas.drawRect(mid, y + 1, actualPixels, height - 2, true);
         } else {
-            canvas.drawRect(mid + actualPixels, y + 1, -actualPixels, height - 2, true);  // Filled rect
+            canvas.drawRect(mid + actualPixels, y + 1, -actualPixels, height - 2, true);
         }
+
+        const int targetPixels = static_cast<int>(roundf(constrain(target, -1.0f, 1.0f) * range));
+        const int targetX = mid + targetPixels;
+        canvas.drawVLine(targetX, y, height);
     }
 
     void drawMotorBarLabels(DisplayCanvas& canvas, int x, int y,
-                            const char* frontLabel, float frontValue,
-                            const char* rearLabel, float rearValue) {
+                            float targetValue, float actualValue) {
         const int width = 72;
         const int height = 10;
 
-        char frontBuf[8];
-        char rearBuf[8];
-        formatMotorPercent(frontValue, frontBuf, sizeof(frontBuf));
-        formatMotorPercent(rearValue, rearBuf, sizeof(rearBuf));
+        char targetBuf[8];
+        char actualBuf[8];
+        formatMotorPercent(targetValue, targetBuf, sizeof(targetBuf));
+        formatMotorPercent(actualValue, actualBuf, sizeof(actualBuf));
 
-        char line[32];
-        snprintf(line, sizeof(line), "%s%s %s%s", frontLabel, frontBuf, rearLabel, rearBuf);
+        char line[24];
+        snprintf(line, sizeof(line), "T:%s A:%s", targetBuf, actualBuf);
 
-        // Center the text in the bar (XOR mode for visibility)
-        int textWidth = strlen(line) * 5;  // Approximate width
+        int textWidth = strlen(line) * 5;
         int cursorX = x + (width - textWidth) / 2;
         if (cursorX < x + 1) cursorX = x + 1;
 
-        canvas.setDrawColor(2);  // XOR mode
+        canvas.setDrawColor(2);
         canvas.drawText(cursorX, y + height - 2, line);
-        canvas.setDrawColor(1);  // Normal mode
+        canvas.setDrawColor(1);
     }
 
     void formatMotorPercent(float value, char* buffer, size_t size) {
         int percent = static_cast<int>(roundf(constrain(value, -1.0f, 1.0f) * 100.0f));
         snprintf(buffer, size, "%+d%%", percent);
+    }
+
+    void drawStatusTag(DisplayCanvas& canvas, int x, int y, const char* label, bool active) {
+        const int width = 24;
+        const int height = 9;
+        canvas.drawRFrame(x, y, width, height, 2);
+        if (active) {
+            canvas.drawBox(x + 1, y + 1, width - 2, height - 2);
+            canvas.setDrawColor(2);
+        }
+        canvas.drawText(x + 3, y + height - 2, label);
+        if (active) {
+            canvas.setDrawColor(1);
+        }
     }
 
     // ============================================================================
@@ -595,20 +639,31 @@ private:
         fw.setEncoderFunction(1, f2);
 
         // Register button bindings
-        // Button 3: Toggle between Drive and Arm modes
-        ControlBinding binding1;
-        binding1.input = INPUT_BUTTON3;
-        binding1.event = EVENT_PRESS;
-        binding1.action = []() {
-            if (mechIaneMode == MechIaneMode::DriveMode) {
-                mechIaneMode = MechIaneMode::ArmXYZ;
-                AudioRegistry::play("menu_select");
-            } else {
-                mechIaneMode = MechIaneMode::DriveMode;
+        // Button 3: Gripper + profile cycle
+        ControlBinding gripperToggle;
+        gripperToggle.input = INPUT_BUTTON3;
+        gripperToggle.event = EVENT_PRESS;
+        gripperToggle.action = []() {
+            if (mechIaneMode != MechIaneMode::DriveMode) {
+                toggleUnifiedGripper();
                 AudioRegistry::play("menu_select");
             }
         };
-        ControlBindingSystem::registerBinding(binding1);
+        gripperToggle.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
+        ControlBindingSystem::registerBinding(gripperToggle);
+
+        ControlBinding profileCycle;
+        profileCycle.input = INPUT_BUTTON3;
+        profileCycle.event = EVENT_LONG_PRESS;
+        profileCycle.action = [this]() {
+            const GillDriveProfile next =
+                (thegillConfig.profile == GillDriveProfile::Tank)
+                    ? GillDriveProfile::Differential
+                    : GillDriveProfile::Tank;
+            setDriveProfile(next);
+            AudioRegistry::play("paired");
+        };
+        ControlBindingSystem::registerBinding(profileCycle);
 
         // Joystick A Button: Toggle XYZ/Orientation control (only in arm mode)
         ControlBinding binding2;
@@ -626,32 +681,6 @@ private:
         };
         binding2.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
         ControlBindingSystem::registerBinding(binding2);
-
-        // Button 1: Toggle grippers (only in arm mode)
-        {
-            ControlBinding binding3;
-            binding3.input = INPUT_BUTTON1;
-            binding3.event = EVENT_PRESS;
-            binding3.action = []() {
-                const InputManager& inputs = InputManager::getInstance();
-                bool button2Pressed = inputs.getButton2();
-
-                if (button2Pressed) {
-                    // Shift + Button 1: Toggle gripper 1 independently
-                    const float openDeg = 45.0f;
-                    const float closedDeg = 90.0f;
-                    const float current = armCommand.gripper1Degrees;
-                    setGripperFingerPosition(0, (fabsf(current - closedDeg) < 1.0f) ? openDeg : closedDeg);
-                    AudioRegistry::play("menu_select");
-                } else {
-                    // Just Button 1: Toggle both grippers
-                    toggleUnifiedGripper();
-                    AudioRegistry::play("menu_select");
-                }
-            };
-            binding3.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
-            ControlBindingSystem::registerBinding(binding3);
-        }
 
         // Joystick B Button: Toggle precision mode for fine manipulation
         ControlBinding precisionBinding;
@@ -676,10 +705,10 @@ private:
         };
         ControlBindingSystem::registerBinding(orientationReset);
 
-        // Button 2 double click: Snap gripper closed for safety
+        // Joystick B long press: Snap gripper closed for safety
         ControlBinding safeClose;
-        safeClose.input = INPUT_BUTTON2;
-        safeClose.event = EVENT_DOUBLE_CLICK;
+        safeClose.input = INPUT_JOYSTICK_B_BUTTON;
+        safeClose.event = EVENT_LONG_PRESS;
         safeClose.action = []() {
             setUnifiedGripper(false);
             AudioRegistry::play("menu_select");
@@ -687,12 +716,12 @@ private:
         };
         ControlBindingSystem::registerBinding(safeClose);
 
-        // Button 1 double click: Individual finger trim (finger 1 opens)
+        // Joystick B double click: Finger 1 macro
         ControlBinding finger1Trim;
-        finger1Trim.input = INPUT_BUTTON1;
+        finger1Trim.input = INPUT_JOYSTICK_B_BUTTON;
         finger1Trim.event = EVENT_DOUBLE_CLICK;
         finger1Trim.action = []() {
-            setGripperFingerPosition(0, isGripperOpen() ? 30.0f : 60.0f);
+            setGripperFingerPosition(0, isGripperOpen() ? 30.0f : 70.0f);
             AudioRegistry::play("edit_adjust");
         };
         finger1Trim.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
@@ -730,33 +759,38 @@ private:
         switch (buttonIndex) {
             case 0: // Button 1 - Brake
                 if (evt == ButtonEvent::PRESSED) {
-                    thegillCommand.flags |= GILL_FLAG_BRAKE;
+                    thegillCommand.flags |= GillCommandFlag_Brake;
                     thegillRuntime.brakeActive = true;
                     AudioRegistry::play("menu_select");
                 } else if (evt == ButtonEvent::RELEASED) {
-                    thegillCommand.flags &= ~GILL_FLAG_BRAKE;
+                    thegillCommand.flags &= ~GillCommandFlag_Brake;
                     thegillRuntime.brakeActive = false;
                 }
                 break;
 
             case 1: // Button 2 - Honk
                 if (evt == ButtonEvent::PRESSED) {
-                    thegillCommand.flags |= GILL_FLAG_HONK;
+                    thegillCommand.flags |= GillCommandFlag_Honk;
                     thegillRuntime.honkActive = true;
                     AudioRegistry::play("paired");
                 } else if (evt == ButtonEvent::RELEASED) {
-                    thegillCommand.flags &= ~GILL_FLAG_HONK;
+                    thegillCommand.flags &= ~GillCommandFlag_Honk;
                     thegillRuntime.honkActive = false;
                 }
                 break;
 
             case 2: // Button 3 - Toggle Mode (long press)
-                if (evt == ButtonEvent::LONG_PRESS) {
-                    if (thegillConfig.mode == GillMode::Default) {
-                        setMode(GillMode::Differential);
-                    } else {
-                        setMode(GillMode::Default);
+                if (evt == ButtonEvent::PRESSED) {
+                    if (mechIaneMode != MechIaneMode::DriveMode) {
+                        toggleUnifiedGripper();
+                        AudioRegistry::play("menu_select");
                     }
+                } else if (evt == ButtonEvent::LONG_PRESS) {
+                    GillDriveProfile next =
+                        (thegillConfig.profile == GillDriveProfile::Tank)
+                            ? GillDriveProfile::Differential
+                            : GillDriveProfile::Tank;
+                    setDriveProfile(next);
                     AudioRegistry::play("paired");
                 }
                 break;
@@ -1765,7 +1799,12 @@ static void registerModuleMenuEntries() {
         entry.label = module->getModuleName();
         entry.shortLabel = nullptr;
         entry.onSelect = [module]() {
-            FrameworkEngine::getInstance().loadModule(module);
+            Serial.printf("[ModuleRegistration] Loading module: %s\n", module->getModuleName());
+            FrameworkEngine& fw = FrameworkEngine::getInstance();
+            fw.loadModule(module);
+            // Close menu after loading module (menu will be rebuilt with module's entries)
+            fw.closeMenu();
+            AudioRegistry::play("paired");
         };
         entry.condition = nullptr;
         entry.getValue = nullptr;

@@ -22,14 +22,22 @@
 // Menu scroll - subtle upward chirp
 REGISTER_AUDIO_CUSTOM(menu_select, []() {
     audioPlayTone(800, 20);
-    delay(15);
+    uint32_t start = millis();
+    while (millis() - start < 35) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1000, 25);
 });
 
 // Menu back - downward chirp
 REGISTER_AUDIO_CUSTOM(menu_back, []() {
     audioPlayTone(1000, 20);
-    delay(15);
+    uint32_t start = millis();
+    while (millis() - start < 35) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(800, 25);
 });
 
@@ -40,23 +48,39 @@ REGISTER_AUDIO_CUSTOM(menu_back, []() {
 // General action/pair - pleasant upward sweep
 REGISTER_AUDIO_CUSTOM(paired, []() {
     audioPlayTone(600, 40);
-    delay(30);
+    uint32_t start = millis();
+    while (millis() - start < 70) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(800, 40);
-    delay(30);
+    start = millis();
+    while (millis() - start < 70) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1200, 60);
 });
 
 // Toggle ON - rising tone
 REGISTER_AUDIO_CUSTOM(toggle, []() {
     audioPlayTone(700, 30);
-    delay(20);
+    uint32_t start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1100, 40);
 });
 
 // Toggle OFF - falling tone
 REGISTER_AUDIO_CUSTOM(toggle_off, []() {
     audioPlayTone(1100, 30);
-    delay(20);
+    uint32_t start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(700, 40);
 });
 
@@ -67,7 +91,11 @@ REGISTER_AUDIO_CUSTOM(toggle_off, []() {
 // Enter edit mode - distinctive two-tone up
 REGISTER_AUDIO_CUSTOM(edit_start, []() {
     audioPlayTone(880, 35);
-    delay(25);
+    uint32_t start = millis();
+    while (millis() - start < 60) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1320, 35);
 });
 
@@ -77,18 +105,34 @@ REGISTER_AUDIO(edit_adjust, 1000, 15);
 // Save edited value - satisfying confirmation
 REGISTER_AUDIO_CUSTOM(edit_save, []() {
     audioPlayTone(800, 30);
-    delay(20);
+    uint32_t start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1200, 30);
-    delay(20);
+    start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1600, 50);
 });
 
 // Cancel edit - gentle descending
 REGISTER_AUDIO_CUSTOM(edit_cancel, []() {
     audioPlayTone(1200, 30);
-    delay(20);
+    uint32_t start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(900, 30);
-    delay(20);
+    start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(700, 40);
 });
 
@@ -99,28 +143,63 @@ REGISTER_AUDIO_CUSTOM(edit_cancel, []() {
 // Device discovered - curious chirp
 REGISTER_AUDIO_CUSTOM(peer_discovered, []() {
     audioPlayTone(1200, 30);
-    delay(20);
+    uint32_t start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1400, 25);
-    delay(20);
+    start = millis();
+    while (millis() - start < 45) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1600, 35);
 });
 
 // Pairing in progress - pulsing tone
 REGISTER_AUDIO_CUSTOM(peer_request, []() {
     audioPlayTone(1000, 50);
-    delay(40);
+    uint32_t start = millis();
+    while (millis() - start < 90) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1000, 50);
 });
 
 // Pairing successful - upward cascade
 REGISTER_AUDIO_CUSTOM(peer_acknowledge, []() {
     audioPlayTone(800, 30);
-    delay(15);
+    uint32_t start = millis();
+    while (millis() - start < 45) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1100, 30);
-    delay(15);
+    start = millis();
+    while (millis() - start < 45) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1400, 40);
-    delay(15);
+    start = millis();
+    while (millis() - start < 55) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1800, 50);
+});
+
+// Unpaired/disconnected - descending tone
+REGISTER_AUDIO_CUSTOM(unpaired, []() {
+    audioPlayTone(1200, 30);
+    uint32_t start = millis();
+    while (millis() - start < 50) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
+    audioPlayTone(800, 40);
 });
 
 // ============================================================================
@@ -130,20 +209,40 @@ REGISTER_AUDIO_CUSTOM(peer_acknowledge, []() {
 // General error - double descending beep
 REGISTER_AUDIO_CUSTOM(error, []() {
     audioPlayTone(800, 50);
-    delay(30);
+    uint32_t start = millis();
+    while (millis() - start < 80) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(600, 50);
-    delay(80);
+    start = millis();
+    while (millis() - start < 130) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(800, 50);
-    delay(30);
+    start = millis();
+    while (millis() - start < 80) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(600, 50);
 });
 
 // Timeout warning - urgent triple beep
 REGISTER_AUDIO_CUSTOM(timeout_warning, []() {
     audioPlayTone(900, 40);
-    delay(50);
+    uint32_t start = millis();
+    while (millis() - start < 90) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(900, 40);
-    delay(50);
+    start = millis();
+    while (millis() - start < 90) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(900, 40);
 });
 
@@ -154,11 +253,23 @@ REGISTER_AUDIO_CUSTOM(timeout_warning, []() {
 // Startup melody - friendly ascending tune
 REGISTER_AUDIO_CUSTOM(startup, []() {
     audioPlayTone(523, 80);   // C
-    delay(60);
+    uint32_t start = millis();
+    while (millis() - start < 140) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(659, 80);   // E
-    delay(60);
+    start = millis();
+    while (millis() - start < 140) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(784, 80);   // G
-    delay(60);
+    start = millis();
+    while (millis() - start < 140) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1047, 120); // High C
 });
 
@@ -170,7 +281,11 @@ REGISTER_AUDIO_CUSTOM(startup, []() {
 REGISTER_AUDIO_CUSTOM(arm_actuate, []() {
     for (int i = 0; i < 3; i++) {
         audioPlayTone(400 + (i * 100), 25);
-        delay(15);
+        uint32_t start = millis();
+        while (millis() - start < 40) {
+            audioUpdate();
+            delayMicroseconds(100);
+        }
     }
 });
 
@@ -178,16 +293,28 @@ REGISTER_AUDIO_CUSTOM(arm_actuate, []() {
 REGISTER_AUDIO_CUSTOM(mode_change, []() {
     for (int freq = 1200; freq <= 1800; freq += 100) {
         audioPlayTone(freq, 20);
-        delay(5);
+        uint32_t start = millis();
+        while (millis() - start < 25) {
+            audioUpdate();
+            delayMicroseconds(100);
+        }
     }
 });
 
 // Gripper action - pinch sound
 REGISTER_AUDIO_CUSTOM(gripper, []() {
     audioPlayTone(1500, 25);
-    delay(10);
+    uint32_t start = millis();
+    while (millis() - start < 35) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1200, 25);
-    delay(10);
+    start = millis();
+    while (millis() - start < 35) {
+        audioUpdate();
+        delayMicroseconds(100);
+    }
     audioPlayTone(1000, 35);
 });
 

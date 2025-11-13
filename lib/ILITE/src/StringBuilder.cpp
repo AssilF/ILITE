@@ -63,23 +63,23 @@ uint32_t g_cursorBlink = 0;
 
 KeyRow commandRow() {
     KeyRow row;
-    row.push_back(makeKey("Shift", KeyAction::Shift, 0, 18));
-    row.push_back(makeKey("Sym", KeyAction::ToggleLayout, 0, 18));
-    row.push_back(makeKey("Space", KeyAction::Space, 0, 36));
-    row.push_back(makeKey("Bksp", KeyAction::Backspace, 0, 20));
-    row.push_back(makeKey("Enter", KeyAction::Enter, 0, 20));
-    row.push_back(makeKey("Exit", KeyAction::Cancel, 0, 18));
+    row.push_back(makeKey("^", KeyAction::Shift, 0, 14));
+    row.push_back(makeKey("123", KeyAction::ToggleLayout, 0, 16));
+    row.push_back(makeKey("___", KeyAction::Space, 0, 44));
+    row.push_back(makeKey("<<", KeyAction::Backspace, 0, 16));
+    row.push_back(makeKey("OK", KeyAction::Enter, 0, 18));
+    row.push_back(makeKey("X", KeyAction::Cancel, 0, 14));
     return row;
 }
 
-KeyRow makeCharRow(const char* chars) {
+KeyRow makeCharRow(const char* chars, uint8_t keyWidth = 12) {
     KeyRow row;
     for (const char* p = chars; *p; ++p) {
         KeyDef key;
         key.label.assign(1, *p);
         key.action = KeyAction::Character;
         key.value = *p;
-        key.width = 12;
+        key.width = keyWidth;
         row.push_back(key);
     }
     return row;
@@ -88,9 +88,9 @@ KeyRow makeCharRow(const char* chars) {
 const std::vector<KeyRow>& letterLayout() {
     static std::vector<KeyRow> layout = [] {
         std::vector<KeyRow> rows;
-        rows.push_back(makeCharRow("qwertyuiop"));
-        rows.push_back(makeCharRow("asdfghjkl"));
-        rows.push_back(makeCharRow("zxcvbnm"));
+        rows.push_back(makeCharRow("qwertyuiop", 12));
+        rows.push_back(makeCharRow("asdfghjkl", 13));
+        rows.push_back(makeCharRow("zxcvbnm", 17));
         rows.push_back(commandRow());
         return rows;
     }();
@@ -100,9 +100,9 @@ const std::vector<KeyRow>& letterLayout() {
 const std::vector<KeyRow>& symbolLayout() {
     static std::vector<KeyRow> layout = [] {
         std::vector<KeyRow> rows;
-        rows.push_back(makeCharRow("1234567890"));
-        rows.push_back(makeCharRow("!@#$%^&*?"));
-        rows.push_back(makeCharRow("-_=+/:.;,"));
+        rows.push_back(makeCharRow("1234567890", 12));
+        rows.push_back(makeCharRow("!@#$%^&*()", 12));
+        rows.push_back(makeCharRow("-_=+/:.;,", 13));
         rows.push_back(commandRow());
         return rows;
     }();
@@ -236,17 +236,21 @@ void applyKey(KeyAction action, char value) {
 }
 
 void drawKey(DisplayCanvas& canvas, const KeyDef& key, int16_t x, int16_t y, bool selected) {
-    const int16_t keyHeight = 12;
+    const int16_t keyHeight = 11;  // Slightly smaller height
     const int16_t width = key.width ? key.width : 12;
 
     canvas.drawRect(x, y, width, keyHeight, false);
     if (selected) {
+        // Filled selection for ultra compact look
         canvas.drawRect(x + 1, y + 1, width - 2, keyHeight - 2, true);
         canvas.setDrawColor(0);
     }
 
     canvas.setFont(DisplayCanvas::TINY);
-    canvas.drawText(x + 2, y + 8, key.label.c_str());
+    // Center the text in the key
+    int16_t textX = x + (width - static_cast<int16_t>(key.label.length() * 4)) / 2;
+    if (textX < x + 1) textX = x + 1;
+    canvas.drawText(textX, y + 8, key.label.c_str());
 
     if (selected) {
         canvas.setDrawColor(1);
@@ -306,10 +310,10 @@ void drawKeyboardScreen(DisplayCanvas& canvas) {
     drawTextArea(canvas);
 
     const auto& layout = activeLayout();
-    const int16_t startX = 4;
-    int16_t y = 40;
-    const int16_t keyHeight = 12;
-    const int16_t rowSpacing = 2;
+    const int16_t startX = 2;  // Tighter margins
+    int16_t y = 38;             // Start keyboard higher
+    const int16_t keyHeight = 11;  // Match drawKey height
+    const int16_t rowSpacing = 1;  // Tighter spacing
 
     for (size_t rowIndex = 0; rowIndex < layout.size(); ++rowIndex) {
         const KeyRow& row = layout[rowIndex];
@@ -317,7 +321,7 @@ void drawKeyboardScreen(DisplayCanvas& canvas) {
         for (size_t col = 0; col < row.size(); ++col) {
             bool selected = (rowIndex == g_state.selectedRow && col == g_state.selectedCol);
             drawKey(canvas, row[col], x, y, selected);
-            x += (row[col].width ? row[col].width : 12) + 2;
+            x += (row[col].width ? row[col].width : 12) + 1;  // Tighter key spacing
         }
         y += keyHeight + rowSpacing;
     }
@@ -344,11 +348,12 @@ void handleJoystickNavigation() {
         moved = true;
     }
 
+    // Inverted joystick: y > threshold = down, y < -threshold = up
     if (y > threshold) {
-        moveSelection(0, -1);
+        moveSelection(0, 1);
         moved = true;
     } else if (y < -threshold) {
-        moveSelection(0, 1);
+        moveSelection(0, -1);
         moved = true;
     }
 

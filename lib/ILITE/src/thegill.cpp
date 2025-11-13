@@ -6,62 +6,190 @@
 #include "InverseKinematics.h"
 #include "input.h"
 #include <math.h>
+#include <cstring>
 
-// Helper to convert InputManager normalized values (-1.0 to +1.0) to motor range
-static inline int16_t normalizedToMotor(float normalized) {
-    return static_cast<int16_t>(normalized * 32767.0f);
+namespace {
+
+constexpr int16_t kMaxWheelCommand = 1000;
+constexpr float kMinDriveScale = 0.35f;
+constexpr float kMaxDriveScale = 1.0f;
+constexpr uint32_t kPeripheralIntervalMs = 120;
+constexpr uint32_t kConfigMinIntervalMs = 1000;
+constexpr uint32_t kArmStateRequestIntervalMs = 250;
+constexpr uint32_t kArmCommandMinIntervalMs = 40;
+constexpr float kDriveDeadzone = 0.05f;
+constexpr float kMaxWheelSpeedMmPerSec = 1200.0f;
+
+static inline int16_t toWheelCommand(float normalized) {
+    return static_cast<int16_t>(constrain(normalized, -1.0f, 1.0f) * kMaxWheelCommand);
 }
 
-// Helper to apply easing curve to normalized input (-1.0 to +1.0)
-static inline float applyEasing(float input, GillEasing easing) {
-    if (easing == GillEasing::None || fabsf(input) < 0.001f) {
-        return input;
-    }
-
-    // Get sign and work with absolute value
-    float sign = (input < 0.0f) ? -1.0f : 1.0f;
-    float absValue = fabsf(input);
-
-    // Apply easing curve (0.0 to 1.0 range)
-    float eased = applyEasingCurve(easing, absValue);
-
-    // Restore sign
-    return eased * sign;
-}
+} // namespace
 
 ThegillCommand thegillCommand{
   THEGILL_PACKET_MAGIC,
   0, 0, 0, 0,
-  4.0f,
-  GillMode::Default,
-  kDefaultGillEasing,
+  0,
+  0
+};
+
+PeripheralCommand thegillPeripheralCommand{
+  THEGILL_PERIPHERAL_MAGIC,
+  {0, 0, 0},
+  0,
+  0,
+  {0, 0, 0}
+};
+
+ConfigurationPacket thegillConfigurationPacket{
+  THEGILL_CONFIG_MAGIC,
+  static_cast<uint8_t>(DriveEasingMode::None),
+  0,
+  ConfigFlag::DriveEnabled | ConfigFlag::ArmOutputs | ConfigFlag::FailsafeEnable,
+  SafetyFlag::BatterySafety,
+  20000,
+  20500
+};
+
+StatusPacket thegillStatusPacket{
+  THEGILL_STATUS_MAGIC,
+  {0, 0, 0, 0},
+  0,
+  {0, 0, 0},
+  0,
+  0,
+  0,
+  0
+};
+
+ArmStatePacket thegillArmStatePacket{
+  THEGILL_ARM_STATE_MAGIC,
+  0.0f,
+  0.0f,
+  {0.f, 0.f, 0.f, 0.f, 0.f},
+  0,
   0,
   0
 };
 
 ThegillConfig thegillConfig{
-  GillMode::Default,
-  kDefaultGillEasing
+  GillDriveProfile::Tank,
+  GillDriveEasing::None,
+  0.35f
 };
 
 ThegillRuntime thegillRuntime{
   0.f, 0.f, 0.f, 0.f,
   0.f, 0.f, 0.f, 0.f,
-  4.0f,
   false,
-  false
-};
-
-ThegillTelemetryPacket thegillTelemetryPacket{
-  THEGILL_PACKET_MAGIC,
-  0.f, 0.f, 0.f,
-  0.f, 0.f, 0.f,
+  false,
+  true,
+  true,
+  false,
+  false,
   0,
-  0, 0, 0,
-  0.f,
-  0.f,
+  0,
+  {0, 0, 0},
+  0,
+  0,
   0
 };
+
+static bool precisionMode = false;
+static bool brakeLatch = false;
+static bool honkActive = false;
+static bool telemetryEnabled = false;
+static bool buzzerEnabled = true;
+static bool driveEnabled = true;
+static bool failsafeEnabled = true;
+static bool armOutputsEnabled = false;
+static bool requestStatusPulse = false;
+static bool requestArmStatePending = false;
+static bool armStateSynced = false;
+static bool peripheralDirty = true;
+static bool configDirty = true;
+static uint32_t lastPeripheralSendMs = 0;
+static uint32_t lastConfigSendMs = 0;
+static uint32_t lastArmStateRequestMs = 0;
+static uint32_t lastArmCommandSendMs = 0;
+static uint32_t lastStatusPacketMs = 0;
+static uint32_t lastArmStatePacketMs = 0;
+static float lastLeftCommand = 0.0f;
+static float lastRightCommand = 0.0f;
+static bool armCommandDirty = false;
+static uint8_t systemCommandLatch = 0;
+static MechIaneMode previousMode = MechIaneMode::DriveMode;
+
+static bool updateByte(uint8_t& target, uint8_t value) {
+    if (target == value) {
+        return false;
+    }
+    target = value;
+    return true;
+}
+
+static void refreshPeripheralState(float driveMagnitude, float potValue) {
+    bool changed = false;
+    const uint8_t driveLed = static_cast<uint8_t>(constrain(driveMagnitude, 0.0f, 1.0f) * 255.0f);
+    const uint8_t armLed = isArmStateSynced() ? 220 : 90;
+    const uint8_t gripperLed = isGripperOpen() ? 230 : 80;
+
+    changed |= updateByte(thegillPeripheralCommand.ledPwm[0], driveLed);
+    changed |= updateByte(thegillPeripheralCommand.ledPwm[1], armLed);
+    changed |= updateByte(thegillPeripheralCommand.ledPwm[2], gripperLed);
+
+    const uint8_t pumpDuty = static_cast<uint8_t>(constrain(potValue, 0.0f, 1.0f) * 200.0f);
+    changed |= updateByte(thegillPeripheralCommand.pumpDuty, pumpDuty);
+
+    uint8_t mask = 0;
+    if (thegillRuntime.brakeActive) mask |= 0x01;
+    if (thegillRuntime.honkActive) mask |= 0x02;
+    if (mechIaneMode != MechIaneMode::DriveMode) mask |= 0x04;
+    if (precisionMode) mask |= 0x08;
+    if (armStateSynced) mask |= 0x10;
+    changed |= updateByte(thegillPeripheralCommand.userMask, mask);
+
+    if (changed) {
+        peripheralDirty = true;
+    }
+}
+
+static void latchSystemCommand(uint8_t bits) {
+    systemCommandLatch |= bits;
+}
+
+static void syncConfigurationPacket() {
+    thegillConfigurationPacket.magic = THEGILL_CONFIG_MAGIC;
+
+    DriveEasingMode easingMode = DriveEasingMode::None;
+    uint8_t easingRateByte = 0;
+    switch (thegillConfig.easing) {
+        case GillDriveEasing::SlewRate:
+            easingMode = DriveEasingMode::SlewRate;
+            easingRateByte = static_cast<uint8_t>(constrain(thegillConfig.easingRate * 255.0f, 0.0f, 255.0f));
+            break;
+        case GillDriveEasing::Exponential:
+            easingMode = DriveEasingMode::Exponential;
+            easingRateByte = static_cast<uint8_t>(constrain(thegillConfig.easingRate * 255.0f, 0.0f, 255.0f));
+            break;
+        case GillDriveEasing::None:
+        default:
+            easingMode = DriveEasingMode::None;
+            easingRateByte = 0;
+            break;
+    }
+
+    thegillConfigurationPacket.easingMode = static_cast<uint8_t>(easingMode);
+    thegillConfigurationPacket.easingRate = easingRateByte;
+
+    uint8_t controlFlags = 0;
+    if (!buzzerEnabled)      controlFlags |= ConfigFlag::MuteAudio;
+    if (driveEnabled)        controlFlags |= ConfigFlag::DriveEnabled;
+    if (armOutputsEnabled)   controlFlags |= ConfigFlag::ArmOutputs;
+    if (failsafeEnabled)     controlFlags |= ConfigFlag::FailsafeEnable;
+    thegillConfigurationPacket.controlFlags = controlFlags;
+    thegillConfigurationPacket.safetyFlags = SafetyFlag::BatterySafety;
+}
 
 // Mech'Iane Arm Control State
 ArmControlCommand armCommand{
@@ -84,164 +212,119 @@ static bool lastButton3State = false;
 static bool lastJoyBtnAState = false;
 static float gripperAngleOpen = 45.0f;
 static float gripperAngleClosed = 90.0f;
-static bool precisionMode = false;
 static bool orientationAnglesValid = false;
 static float orientationPitchRad = 0.0f;
 static float orientationYawRad = 0.0f;
 static float targetToolRollDeg = 90.0f;
-
-
-float applyEasingCurve(GillEasing mode, float t){
-  if(t <= 0.f) return 0.f;
-  if(t >= 1.f) return 1.f;
-  switch(mode){
-    case GillEasing::None:
-      return 1.f;
-    case GillEasing::Linear:
-      return t;
-    case GillEasing::EaseIn:
-      return t * t;
-    case GillEasing::EaseOut:
-      return 1.f - powf(1.f - t, 2.f);
-    case GillEasing::EaseInOut:
-      if(t < 0.5f){
-        return 2.f * t * t;
-      }
-      return 1.f - powf(-2.f * t + 2.f, 2.f) / 2.f;
-    case GillEasing::Sine:
-    default:
-      return sinf((t * PI) / 2.f);
-  }
-}
 
 // ============================================================================
 // TheGill Control Update (called at 50Hz)
 // ============================================================================
 
 void updateThegillControl() {
-    // Mode switching is now handled by ControlBindingSystem in ModuleRegistration.cpp
     const InputManager& inputs = InputManager::getInstance();
     const float potValue = inputs.getPotentiometer();
-    const float precisionScalar = precisionMode ? 0.4f : 1.0f;
-    const float adaptiveScalar = (0.35f + potValue * 0.65f) * precisionScalar;
+    const float precisionScalar = precisionMode ? 0.45f : 1.0f;
+    const float adaptiveScalar =
+        (kMinDriveScale + (kMaxDriveScale - kMinDriveScale) * potValue) * precisionScalar;
+    const uint32_t now = millis();
 
-    // ========================================================================
-    // DRIVE MODE - Normal drivetrain control
-    // ========================================================================
+    if (previousMode == MechIaneMode::DriveMode && mechIaneMode != MechIaneMode::DriveMode) {
+        forceArmStateResync();
+    }
+    previousMode = mechIaneMode;
+
+    auto shapeAxis = [](float value) {
+        float v = (fabsf(value) < kDriveDeadzone) ? 0.0f : value;
+        if (thegillConfig.easing == GillDriveEasing::Exponential) {
+            const float expo = constrain(thegillConfig.easingRate, 0.0f, 1.0f);
+            const float power = 1.0f + expo * 1.5f;
+            v = copysignf(powf(fabsf(v), power), v);
+        }
+        return constrain(v, -1.0f, 1.0f);
+    };
+
+    auto applySlew = [](float target, float previous) {
+        if (thegillConfig.easing != GillDriveEasing::SlewRate) {
+            return target;
+        }
+        const float rate = constrain(thegillConfig.easingRate, 0.02f, 1.0f);
+        const float maxDelta = rate * 0.25f;
+        float delta = target - previous;
+        if (delta > maxDelta) delta = maxDelta;
+        if (delta < -maxDelta) delta = -maxDelta;
+        return constrain(previous + delta, -1.0f, 1.0f);
+    };
+
     if (mechIaneMode == MechIaneMode::DriveMode) {
+        float left = shapeAxis(inputs.getJoystickA_Y());
+        float right = shapeAxis(inputs.getJoystickB_Y());
 
-        if (thegillConfig.mode == GillMode::Default) {
-            // Tank drive mode: Left joystick Y = left motors, Right joystick Y = right motors
-            // InputManager provides -1.0 to +1.0 with deadzone and filtering applied
-            float leftY = inputs.getJoystickA_Y();
-            float rightY = inputs.getJoystickB_Y();
-
-            // Apply easing curve on controller side
-            leftY = applyEasing(leftY, thegillConfig.easing);
-            rightY = applyEasing(rightY, thegillConfig.easing);
-            leftY = constrain(leftY * adaptiveScalar, -1.0f, 1.0f);
-            rightY = constrain(rightY * adaptiveScalar, -1.0f, 1.0f);
-
-            // Convert to motor range (-32767 to +32767)
-            int16_t leftMotor = normalizedToMotor(leftY);
-            int16_t rightMotor = normalizedToMotor(rightY);
-
-            // Update command (both front and rear get same value for each side)
-            thegillCommand.leftFront = leftMotor;
-            thegillCommand.leftRear = leftMotor;
-            thegillCommand.rightFront = rightMotor;
-            thegillCommand.rightRear = rightMotor;
-
-        } else {
-            // Differential mode: One joystick controls both forward/back and turning
-            // InputManager provides -1.0 to +1.0 with deadzone and filtering applied
-            float throttle = inputs.getJoystickA_Y();
-            float turn = inputs.getJoystickA_X();
-
-            // Apply easing curve on controller side
-            throttle = applyEasing(throttle, thegillConfig.easing);
-            turn = applyEasing(turn, thegillConfig.easing);
-            throttle *= adaptiveScalar;
-            turn *= adaptiveScalar;
-
-            // Differential drive calculation
-            float leftMotor = constrain(throttle + turn, -1.0f, 1.0f);
-            float rightMotor = constrain(throttle - turn, -1.0f, 1.0f);
-
-            // Convert to motor range
-            thegillCommand.leftFront = normalizedToMotor(leftMotor);
-            thegillCommand.leftRear = normalizedToMotor(leftMotor);
-            thegillCommand.rightFront = normalizedToMotor(rightMotor);
-            thegillCommand.rightRear = normalizedToMotor(rightMotor);
+        if (thegillConfig.profile == GillDriveProfile::Differential) {
+            const float throttle = shapeAxis(inputs.getJoystickA_Y());
+            const float turn = shapeAxis(inputs.getJoystickA_X());
+            left = throttle + turn;
+            right = throttle - turn;
         }
 
-        // Update config in command packet
-        thegillCommand.mode = thegillConfig.mode;
-        thegillCommand.easing = thegillConfig.easing;
-        thegillCommand.easingRate = thegillRuntime.easingRate;
+        left = constrain(left * adaptiveScalar, -1.0f, 1.0f);
+        right = constrain(right * adaptiveScalar, -1.0f, 1.0f);
 
-        // Button states are handled by ControlBindingSystem
-    }
+        left = applySlew(left, lastLeftCommand);
+        right = applySlew(right, lastRightCommand);
+        lastLeftCommand = left;
+        lastRightCommand = right;
 
-    // ========================================================================
-    // ARM CONTROL MODE - Mech'Iane control with IK
-    // ========================================================================
-    else {
-        // Stop drivetrain motors when in arm mode
+        thegillCommand.leftFront = toWheelCommand(left);
+        thegillCommand.leftRear = toWheelCommand(left);
+        thegillCommand.rightFront = toWheelCommand(right);
+        thegillCommand.rightRear = toWheelCommand(right);
+
+        thegillRuntime.targetLeftFront = left;
+        thegillRuntime.targetLeftRear = left;
+        thegillRuntime.targetRightFront = right;
+        thegillRuntime.targetRightRear = right;
+
+        armCommand.validMask = 0;
+        armCommandDirty = false;
+
+        refreshPeripheralState(fmaxf(fabsf(left), fabsf(right)), potValue);
+    } else {
         thegillCommand.leftFront = 0;
         thegillCommand.leftRear = 0;
         thegillCommand.rightFront = 0;
         thegillCommand.rightRear = 0;
 
-        // XYZ/Orientation toggle is now handled by ControlBindingSystem in ModuleRegistration.cpp
-
-        // Read joysticks using InputManager (provides -1.0 to +1.0 with filtering and deadzone)
-        float joyAX = inputs.getJoystickA_X();
-        float joyAY = inputs.getJoystickA_Y();
-        float joyBY = inputs.getJoystickB_Y();
+        const float joyAX = shapeAxis(inputs.getJoystickA_X());
+        const float joyAY = shapeAxis(inputs.getJoystickA_Y());
+        const float joyBY = shapeAxis(inputs.getJoystickB_Y());
 
         if (mechIaneMode == MechIaneMode::ArmXYZ) {
-            // XYZ Position Control
-            // Joystick A X -> X axis (left/right)
-            // Joystick A Y -> Y axis (forward/back)
-            // Joystick B Y -> Z axis (up/down)
-
-            const float positionSpeed = 8.0f * adaptiveScalar; // mm per frame at max joystick
-            targetPosition.x += joyAX * positionSpeed;
-            targetPosition.y += joyAY * positionSpeed;
-            targetPosition.z += joyBY * positionSpeed;
-
-            // Clamp target position to reasonable workspace
-            targetPosition.x = constrain(targetPosition.x, 50.0f, 450.0f);
-            targetPosition.y = constrain(targetPosition.y, -300.0f, 300.0f);
-            targetPosition.z = constrain(targetPosition.z, 0.0f, 400.0f);
-
+            const float positionSpeed = 9.0f * adaptiveScalar;
+            targetPosition.x = constrain(targetPosition.x + joyAX * positionSpeed, 50.0f, 450.0f);
+            targetPosition.y = constrain(targetPosition.y + joyAY * positionSpeed, -300.0f, 300.0f);
+            targetPosition.z = constrain(targetPosition.z + joyBY * positionSpeed, 0.0f, 420.0f);
         } else {
-            // Orientation Control (Pitch/Yaw/Roll)
-            // Joystick A X -> Yaw
-            // Joystick A Y -> Pitch
-            // Joystick B Y -> Roll
-
             if (!orientationAnglesValid) {
                 float length = sqrtf(targetOrientation.x * targetOrientation.x +
-                                   targetOrientation.y * targetOrientation.y +
-                                   targetOrientation.z * targetOrientation.z);
+                                     targetOrientation.y * targetOrientation.y +
+                                     targetOrientation.z * targetOrientation.z);
                 if (length < 0.001f) {
-                    length = 1.0f;
                     targetOrientation = {0.0f, 0.0f, 1.0f};
+                    length = 1.0f;
                 }
                 orientationPitchRad = asinf(targetOrientation.z / length);
                 orientationYawRad = atan2f(targetOrientation.y, targetOrientation.x);
                 orientationAnglesValid = true;
             }
 
-            const float orientSpeed = 0.08f * adaptiveScalar; // radians per frame at max joystick
-            const float rollSpeedDeg = 10.0f * (0.5f + potValue) * precisionScalar;
+            const float orientSpeed = 0.08f * adaptiveScalar;
+            const float rollSpeedDeg = 12.0f * (0.5f + potValue) * precisionScalar;
 
-            orientationPitchRad += joyAY * orientSpeed;
+            orientationPitchRad = constrain(orientationPitchRad + joyAY * orientSpeed,
+                                            -PI / 2.0f + 0.1f,
+                                            PI / 2.0f - 0.1f);
             orientationYawRad += joyAX * orientSpeed;
-            orientationPitchRad = constrain(orientationPitchRad, -PI / 2.0f + 0.1f, PI / 2.0f - 0.1f);
-
             targetToolRollDeg = constrain(targetToolRollDeg + joyBY * rollSpeedDeg, 0.0f, 180.0f);
 
             targetOrientation.x = cosf(orientationPitchRad) * cosf(orientationYawRad);
@@ -249,26 +332,38 @@ void updateThegillControl() {
             targetOrientation.z = sinf(orientationPitchRad);
         }
 
-        // Solve IK for current target
         IKEngine::IKSolution solution;
-        ikSolver.solve(targetPosition, targetOrientation, solution);
+        if (ikSolver.solve(targetPosition, targetOrientation, solution)) {
+            armCommand.extensionMillimeters = constrain(solution.joints.elbowExtensionMm, 0.0f, 250.0f);
+            armCommand.shoulderDegrees = solution.joints.shoulderDeg;
+            armCommand.elbowDegrees = solution.joints.elbowDeg;
+            armCommand.pitchDegrees = solution.joints.gripperPitchDeg;
+            armCommand.rollDegrees = targetToolRollDeg;
+            armCommand.yawDegrees = solution.joints.gripperYawDeg;
+            armCommand.validMask = ArmCommandMask::AllServos | ArmCommandMask::Extension;
+            armCommand.flags = ArmCommandFlag::EnableOutputs;
+            armCommandDirty = true;
+        }
 
-        // Update arm command with IK solution
-        armCommand.extensionMillimeters = solution.joints.elbowExtensionMm;
-        armCommand.shoulderDegrees = solution.joints.shoulderDeg;
-        armCommand.elbowDegrees = solution.joints.elbowDeg;
-        armCommand.pitchDegrees = solution.joints.gripperPitchDeg;
-        armCommand.rollDegrees = targetToolRollDeg;
-        armCommand.yawDegrees = solution.joints.gripperYawDeg;
-
-        armCommand.validMask = ArmCommandMask::AllServos | ArmCommandMask::Extension;
-
-        // Gripper control is now handled by ControlBindingSystem in ModuleRegistration.cpp
-        // TODO: Implement gripper control bindings in ModuleRegistration.cpp
+        refreshPeripheralState(0.0f, potValue);
     }
 
-    thegillRuntime.brakeActive = (thegillCommand.flags & GILL_FLAG_BRAKE) != 0;
-    thegillRuntime.honkActive = (thegillCommand.flags & GILL_FLAG_HONK) != 0;
+    if (requestStatusPulse) {
+        latchSystemCommand(GillSystemCommand_RequestStatus);
+        requestStatusPulse = false;
+    }
+
+    if (requestArmStatePending && (now - lastArmStateRequestMs) >= kArmStateRequestIntervalMs) {
+        latchSystemCommand(GillSystemCommand_RequestArmState);
+        lastArmStateRequestMs = now;
+    }
+
+    thegillCommand.magic = THEGILL_PACKET_MAGIC;
+    thegillCommand.system = systemCommandLatch;
+    systemCommandLatch = 0;
+
+    thegillRuntime.brakeActive = (thegillCommand.flags & GillCommandFlag_Brake) != 0;
+    thegillRuntime.honkActive = (thegillCommand.flags & GillCommandFlag_Honk) != 0;
 }
 
 // ============================================================================
@@ -460,6 +555,61 @@ Point2D projectIsometric(float x, float y, float z, float scale = 0.12f) {
             float perspective = 240.0f / depth;
             p.x = static_cast<int16_t>(x1 * perspective + 64);
             p.y = static_cast<int16_t>(-z2 * perspective + 38);
+            break;
+        }
+
+        case ArmCameraView::OrbitHigh: {
+            const float angleX = 0.9f;
+            const float angleZ = 0.45f;
+            float cosX = cosf(angleX);
+            float sinX = sinf(angleX);
+            float cosZ = cosf(angleZ);
+            float sinZ = sinf(angleZ);
+
+            float x1 = x * cosZ - y * sinZ;
+            float y1 = x * sinZ + y * cosZ;
+            float y2 = y1 * cosX - z * sinX;
+
+            p.x = static_cast<int16_t>(x1 * 0.10f + 70);
+            p.y = static_cast<int16_t>(-y2 * 0.10f + 30);
+            break;
+        }
+
+        case ArmCameraView::ShoulderClose: {
+            const float focusX = 120.0f;
+            const float focusY = 0.0f;
+            const float focusZ = 140.0f;
+            const float localScale = 0.20f;
+            p.x = static_cast<int16_t>((x - focusX) * localScale + 64);
+            p.y = static_cast<int16_t>((focusZ - z) * localScale + 42);
+            break;
+        }
+
+        case ArmCameraView::RearQuarter: {
+            const float camX = 200.0f;
+            const float camY = -360.0f;
+            const float camZ = 150.0f;
+            float dx = x - camX;
+            float dy = y - camY;
+            float dz = z - camZ;
+
+            const float yaw = 0.55f;
+            const float pitch = 0.4f;
+            float cosYaw = cosf(yaw);
+            float sinYaw = sinf(yaw);
+            float cosPitch = cosf(pitch);
+            float sinPitch = sinf(pitch);
+
+            float x1 = dx * cosYaw - dy * sinYaw;
+            float y1 = dx * sinYaw + dy * cosYaw;
+            float y2 = y1 * cosPitch - dz * sinPitch;
+            float z2 = y1 * sinPitch + dz * cosPitch;
+
+            float depth = y2 + 520.0f;
+            if (depth < 10.0f) depth = 10.0f;
+            float perspective = 210.0f / depth;
+            p.x = static_cast<int16_t>(x1 * perspective + 64);
+            p.y = static_cast<int16_t>(-z2 * perspective + 46);
             break;
         }
     }
@@ -654,6 +804,198 @@ void setGripperFingerPosition(uint8_t fingerIndex, float degrees) {
         armCommand.gripper2Degrees = clamped;
         armCommand.validMask |= ArmCommandMask::Gripper2;
     }
+}
+
+static IKEngine::Vec3 estimateToolPosition(const ArmStatePacket& packet) {
+    constexpr float shoulderLen = 158.0f;
+    constexpr float elbowBaseLen = 182.0f;
+    constexpr float wristLen = 112.0f;
+
+    const float baseYawRad = packet.baseDegrees * DEG_TO_RAD;
+    const float shoulderRad = packet.servoDegrees[0] * DEG_TO_RAD;
+    const float elbowRad = packet.servoDegrees[1] * DEG_TO_RAD;
+    const float extensionMm = packet.extensionCentimeters * 10.0f;
+    const float forearmLen = elbowBaseLen + extensionMm;
+    const float elbowAngleAbs = shoulderRad + elbowRad - PI;
+
+    const float shoulderX = shoulderLen * cosf(shoulderRad) * cosf(baseYawRad);
+    const float shoulderY = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
+    const float shoulderZ = shoulderLen * sinf(shoulderRad);
+
+    const float elbowX = shoulderX + forearmLen * cosf(elbowAngleAbs) * cosf(baseYawRad);
+    const float elbowY = shoulderY + forearmLen * cosf(elbowAngleAbs) * sinf(baseYawRad);
+    const float elbowZ = shoulderZ + forearmLen * sinf(elbowAngleAbs);
+
+    const float pitchRad = packet.servoDegrees[2] * DEG_TO_RAD;
+    const float yawRad = packet.servoDegrees[4] * DEG_TO_RAD;
+    IKEngine::Vec3 dir{
+        cosf(pitchRad) * cosf(yawRad),
+        cosf(pitchRad) * sinf(yawRad),
+        sinf(pitchRad)
+    };
+
+    IKEngine::Vec3 wrist{
+        elbowX + dir.x * wristLen,
+        elbowY + dir.y * wristLen,
+        elbowZ + dir.z * wristLen
+    };
+    return wrist;
+}
+
+bool acquirePeripheralCommand(PeripheralCommand& out) {
+    const uint32_t now = millis();
+    if (!peripheralDirty && (now - lastPeripheralSendMs) < kPeripheralIntervalMs) {
+        return false;
+    }
+    lastPeripheralSendMs = now;
+    peripheralDirty = false;
+    thegillPeripheralCommand.magic = THEGILL_PERIPHERAL_MAGIC;
+    out = thegillPeripheralCommand;
+    return true;
+}
+
+bool acquireConfigurationPacket(ConfigurationPacket& out) {
+    const uint32_t now = millis();
+    if (!configDirty) {
+        return false;
+    }
+    if (lastConfigSendMs != 0 && (now - lastConfigSendMs) < kConfigMinIntervalMs) {
+        return false;
+    }
+    syncConfigurationPacket();
+    configDirty = false;
+    lastConfigSendMs = now;
+    out = thegillConfigurationPacket;
+    return true;
+}
+
+bool acquireArmCommand(ArmControlCommand& out) {
+    if (mechIaneMode == MechIaneMode::DriveMode) {
+        return false;
+    }
+    if (!armStateSynced) {
+        return false;
+    }
+    const uint32_t now = millis();
+    if (!armCommandDirty && (now - lastArmCommandSendMs) < kArmCommandMinIntervalMs) {
+        return false;
+    }
+    lastArmCommandSendMs = now;
+    armCommand.magic = ARM_COMMAND_MAGIC;
+    out = armCommand;
+    armCommandDirty = false;
+    return true;
+}
+
+void processStatusPacket(const StatusPacket& packet) {
+    if (packet.magic != THEGILL_STATUS_MAGIC) {
+        return;
+    }
+    thegillStatusPacket = packet;
+    lastStatusPacketMs = millis();
+
+    auto normalize = [](int16_t value) {
+        return constrain(static_cast<float>(value) / kMaxWheelSpeedMmPerSec, -1.2f, 1.2f);
+    };
+
+    thegillRuntime.actualLeftFront = normalize(packet.wheelSpeedMmPerSec[0]);
+    thegillRuntime.actualLeftRear = normalize(packet.wheelSpeedMmPerSec[1]);
+    thegillRuntime.actualRightFront = normalize(packet.wheelSpeedMmPerSec[2]);
+    thegillRuntime.actualRightRear = normalize(packet.wheelSpeedMmPerSec[3]);
+
+    thegillRuntime.batteryMillivolts = packet.batteryMillivolts;
+    thegillRuntime.commandAgeMs = packet.commandAgeMs;
+    memcpy(thegillRuntime.ledPwm, packet.ledPwm, sizeof(packet.ledPwm));
+    thegillRuntime.pumpDuty = packet.pumpDuty;
+    thegillRuntime.userMask = packet.userMask;
+    thegillRuntime.statusFlags = packet.flags;
+
+    thegillRuntime.armOutputsEnabled = (packet.flags & StatusFlag::ArmOutputsEnabled) != 0;
+    thegillRuntime.failsafeEnabled = (packet.flags & StatusFlag::FailsafeArmed) != 0;
+    thegillRuntime.telemetryEnabled = (packet.flags & StatusFlag::TelemetryOn) != 0;
+    thegillRuntime.driveEnabled = (packet.flags & StatusFlag::DriveArmed) != 0;
+}
+
+void processArmStatePacket(const ArmStatePacket& packet) {
+    if (packet.magic != THEGILL_ARM_STATE_MAGIC) {
+        return;
+    }
+    thegillArmStatePacket = packet;
+    lastArmStatePacketMs = millis();
+    armStateSynced = true;
+    requestArmStatePending = false;
+
+    targetPosition = estimateToolPosition(packet);
+
+    const float pitchRad = packet.servoDegrees[2] * DEG_TO_RAD;
+    const float yawRad = packet.servoDegrees[4] * DEG_TO_RAD;
+    targetOrientation.x = cosf(pitchRad) * cosf(yawRad);
+    targetOrientation.y = cosf(pitchRad) * sinf(yawRad);
+    targetOrientation.z = sinf(pitchRad);
+    targetOrientation = IKEngine::InverseKinematics::normalise(targetOrientation);
+
+    orientationPitchRad = pitchRad;
+    orientationYawRad = yawRad;
+    orientationAnglesValid = true;
+    targetToolRollDeg = packet.servoDegrees[3];
+
+    armCommand.extensionMillimeters = packet.extensionCentimeters * 10.0f;
+    armCommand.shoulderDegrees = packet.servoDegrees[0];
+    armCommand.elbowDegrees = packet.servoDegrees[1];
+    armCommand.pitchDegrees = packet.servoDegrees[2];
+    armCommand.rollDegrees = packet.servoDegrees[3];
+    armCommand.yawDegrees = packet.servoDegrees[4];
+    armCommand.validMask = ArmCommandMask::AllServos | ArmCommandMask::Extension;
+    armCommand.flags = (packet.flags & 0x01) ? ArmCommandFlag::EnableOutputs : 0;
+    armCommandDirty = false;
+    peripheralDirty = true;
+}
+
+void queueStatusRequest() {
+    requestStatusPulse = true;
+}
+
+void forceArmStateResync() {
+    armStateSynced = false;
+    requestArmStatePending = true;
+    lastArmStateRequestMs = 0;
+    latchSystemCommand(GillSystemCommand_RequestArmState);
+    armCommand.flags |= ArmCommandFlag::EnableOutputs;
+    armCommandDirty = true;
+}
+
+bool isArmStateSynced() {
+    return armStateSynced;
+}
+
+void onThegillPaired() {
+    driveEnabled = true;
+    failsafeEnabled = true;
+    armOutputsEnabled = false;
+    buzzerEnabled = true;
+    syncConfigurationPacket();
+    configDirty = true;
+    peripheralDirty = true;
+    queueStatusRequest();
+    forceArmStateResync();
+}
+
+void onThegillUnpaired() {
+    memset(&thegillCommand.leftFront, 0, sizeof(int16_t) * 4);
+    thegillCommand.flags = 0;
+    thegillCommand.system = 0;
+    lastLeftCommand = 0.0f;
+    lastRightCommand = 0.0f;
+    armCommandDirty = false;
+    armStateSynced = false;
+    requestArmStatePending = false;
+    armCommand.validMask = 0;
+    thegillRuntime = {};
+    peripheralDirty = true;
+}
+
+void markThegillConfigDirty() {
+    configDirty = true;
 }
 
 
