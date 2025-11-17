@@ -1,6 +1,7 @@
 #include "InverseKinematics.h"
 
 #include <math.h>
+#include <algorithm>
 
 namespace IKEngine {
 
@@ -63,7 +64,7 @@ bool InverseKinematics::solve(const Vec3& target, const Vec3& toolDir, IKSolutio
     return solveInternal(target, &toolDir, outSolution);
 }
 
-bool InverseKinematics::solveInternal(const Vec3& target, const Vec3* toolDir, IKSolution& outSolution) const {
+bool InverseKinematics::solveInternal(const Vec3& target, const Vec3*, IKSolution& outSolution) const {
     outSolution = IKSolution{};
 
     if (!isFiniteVec(target)) {
@@ -72,159 +73,120 @@ bool InverseKinematics::solveInternal(const Vec3& target, const Vec3* toolDir, I
         return false;
     }
 
-    Vec3 workingToolDir;
-    if (toolDir != nullptr && isFiniteVec(*toolDir)) {
-        workingToolDir = normalise(*toolDir, config_.toolDirectionEpsilonMm);
-    } else {
-        workingToolDir = normalise(target, config_.toolDirectionEpsilonMm);
-    }
-
-    const float wristLength = config_.dimensions.wristChainLength();
-    const float targetDistance = length(target);
-
-    float offset = wristLength;
-    if (targetDistance < config_.geometryEpsilonMm) {
-        offset = 0.0f;
-    } else if (offset > targetDistance) {
-        offset = clampf(targetDistance - config_.geometryEpsilonMm, 0.0f, wristLength);
-    }
-
-    outSolution.toolDirection = workingToolDir;
-
-    const Vec3 wristTarget{
-        target.x - workingToolDir.x * offset,
-        target.y - workingToolDir.y * offset,
-        target.z - workingToolDir.z * offset};
-
-    outSolution.wristTarget = wristTarget;
-
-    const float planarRadius = sqrtf(wristTarget.x * wristTarget.x + wristTarget.y * wristTarget.y);
-    float baseYawDeg = toDegrees(atan2f(wristTarget.y, wristTarget.x));
-
     const float L1 = config_.dimensions.shoulderLengthMm;
-    float extensionMin = config_.elbowExtension.minMm;
-    float extensionMax = config_.elbowExtension.maxMm;
-    if (extensionMax < extensionMin) {
-        const float tmp = extensionMax;
-        extensionMax = extensionMin;
-        extensionMin = tmp;
-    }
-
     const float L2Base = config_.dimensions.elbowLengthMm;
-    float forearmLength = L2Base + extensionMin;
-
-    float distance = sqrtf(planarRadius * planarRadius + wristTarget.z * wristTarget.z);
-    float distanceForAngles = distance;
-
-    bool withinWorkspace = true;
-    bool clamped = false;
-
-    if (distance <= config_.geometryEpsilonMm) {
-        withinWorkspace = false;
-        clamped = true;
-        distanceForAngles = config_.geometryEpsilonMm;
-    }
-
-    if (distance > (L1 + forearmLength)) {
-        float candidateLength = distance - L1;
-        candidateLength = clampf(candidateLength, forearmLength, L2Base + extensionMax);
-        if (candidateLength > (L2Base + extensionMax) - config_.geometryEpsilonMm) {
-            clamped = true;
-            withinWorkspace = false;
-        }
-        forearmLength = candidateLength;
-    } else {
-        forearmLength = clampf(forearmLength, L2Base + extensionMin, L2Base + extensionMax);
-    }
-
-    const float reachMin = fabsf(L1 - forearmLength);
-    const float reachMax = L1 + forearmLength;
-
-    if (distance > reachMax) {
-        distanceForAngles = reachMax - config_.geometryEpsilonMm;
-        clamped = true;
-        withinWorkspace = false;
-    } else if (distance < reachMin) {
-        distanceForAngles = reachMin + config_.geometryEpsilonMm;
-        clamped = true;
-        withinWorkspace = false;
-    }
-
-    const float angleToTargetRad = atan2f(wristTarget.z, planarRadius);
-
-    float cosShoulderTerm = (L1 * L1 + distanceForAngles * distanceForAngles - forearmLength * forearmLength) /
-                            (2.0f * L1 * distanceForAngles);
-    cosShoulderTerm = clampf(cosShoulderTerm, -1.0f, 1.0f);
-
-    float shoulderRad = angleToTargetRad + acosf(cosShoulderTerm);
-    float shoulderDeg = toDegrees(shoulderRad);
-
-    float cosElbowTerm = (L1 * L1 + forearmLength * forearmLength - distanceForAngles * distanceForAngles) /
-                         (2.0f * L1 * forearmLength);
-    cosElbowTerm = clampf(cosElbowTerm, -1.0f, 1.0f);
-
-    float elbowRad = acosf(cosElbowTerm);
-    float elbowDeg = toDegrees(elbowRad);
-
-    float horizontalTool = sqrtf(workingToolDir.x * workingToolDir.x + workingToolDir.y * workingToolDir.y);
-    float gripperPitch = 90.0f + toDegrees(atan2f(workingToolDir.z, horizontalTool));
-    float gripperYaw = 90.0f + toDegrees(atan2f(workingToolDir.y, workingToolDir.x));
-    float gripperRoll = config_.defaultGripperRollDeg;
+const float extMin = std::min(config_.elbowExtension.minMm, config_.elbowExtension.maxMm);
+const float extMax = std::max(config_.elbowExtension.minMm, config_.elbowExtension.maxMm);
+    const float L2Min = L2Base + extMin;
+    const float L2Max = L2Base + extMax;
 
     const JointLimits baseLimits{
-        min(config_.baseYaw.minDeg, config_.baseYaw.maxDeg),
-        max(config_.baseYaw.minDeg, config_.baseYaw.maxDeg)};
+        std::min(config_.baseYaw.minDeg, config_.baseYaw.maxDeg),
+        std::max(config_.baseYaw.minDeg, config_.baseYaw.maxDeg)};
     const JointLimits shoulderLimits{
-        min(config_.shoulder.minDeg, config_.shoulder.maxDeg),
-        max(config_.shoulder.minDeg, config_.shoulder.maxDeg)};
+        std::min(config_.shoulder.minDeg, config_.shoulder.maxDeg),
+        std::max(config_.shoulder.minDeg, config_.shoulder.maxDeg)};
     const JointLimits elbowLimits{
-        min(config_.elbow.minDeg, config_.elbow.maxDeg),
-        max(config_.elbow.minDeg, config_.elbow.maxDeg)};
-    const JointLimits yawLimits{
-        min(config_.gripperYaw.minDeg, config_.gripperYaw.maxDeg),
-        max(config_.gripperYaw.minDeg, config_.gripperYaw.maxDeg)};
-    const JointLimits pitchLimits{
-        min(config_.gripperPitch.minDeg, config_.gripperPitch.maxDeg),
-        max(config_.gripperPitch.minDeg, config_.gripperPitch.maxDeg)};
-    const JointLimits rollLimits{
-        min(config_.gripperRoll.minDeg, config_.gripperRoll.maxDeg),
-        max(config_.gripperRoll.minDeg, config_.gripperRoll.maxDeg)};
+        std::min(config_.elbow.minDeg, config_.elbow.maxDeg),
+        std::max(config_.elbow.minDeg, config_.elbow.maxDeg)};
 
-    const float baseYawClamped = clampf(baseYawDeg, baseLimits.minDeg, baseLimits.maxDeg);
-    const float shoulderClamped = clampf(shoulderDeg, shoulderLimits.minDeg, shoulderLimits.maxDeg);
-    const float elbowClamped = clampf(elbowDeg, elbowLimits.minDeg, elbowLimits.maxDeg);
-    const float pitchClamped = clampf(gripperPitch, pitchLimits.minDeg, pitchLimits.maxDeg);
-    const float yawClamped = clampf(gripperYaw, yawLimits.minDeg, yawLimits.maxDeg);
-    const float rollClamped = clampf(gripperRoll, rollLimits.minDeg, rollLimits.maxDeg);
+    bool constrained = false;
 
-    if (baseYawClamped != baseYawDeg || shoulderClamped != shoulderDeg ||
-        elbowClamped != elbowDeg || pitchClamped != gripperPitch ||
-        yawClamped != gripperYaw || rollClamped != gripperRoll) {
-        clamped = true;
+    float desiredYaw = toDegrees(atan2f(target.z, target.x));
+    float baseYawDeg = clampf(desiredYaw, baseLimits.minDeg, baseLimits.maxDeg);
+    if (fabsf(baseYawDeg - desiredYaw) > 1e-3f) {
+        constrained = true;
+    }
+    const float baseYawRad = baseYawDeg * DEG_TO_RAD;
+    const float cosYaw = cosf(baseYawRad);
+    const float sinYaw = sinf(baseYawRad);
+
+    float planarX = cosYaw * target.x + sinYaw * target.z;
+    float lateral = -sinYaw * target.x + cosYaw * target.z;
+    if (planarX < 0.0f) {
+        planarX = 0.0f;
+        constrained = true;
+    }
+    if (fabsf(lateral) > 5.0f) {
+        constrained = true;
     }
 
-    float extension = clampf(forearmLength - L2Base, extensionMin, extensionMax);
-    const float extensionAppliedLength = L2Base + extension;
-    if (fabsf(extensionAppliedLength - forearmLength) > config_.geometryEpsilonMm) {
-        clamped = true;
-        forearmLength = extensionAppliedLength;
+    const float vertical = target.y;
+    float distance = sqrtf(planarX * planarX + vertical * vertical);
+
+    float desiredL2 = (distance > config_.geometryEpsilonMm) ? distance - L1 : 0.0f;
+    float L2 = clampf(L2Base + clampf(desiredL2, extMin, extMax), L2Min, L2Max);
+    float extensionMm = clampf(L2 - L2Base, extMin, extMax);
+
+    const float reachMin = fabsf(L1 - L2);
+    const float reachMax = L1 + L2;
+    float distanceEval = clampf(distance, reachMin, reachMax);
+    if (fabsf(distanceEval - distance) > 1e-3f) {
+        constrained = true;
     }
 
-    outSolution.joints.baseYawDeg = baseYawClamped;
+    const float angleToTarget = atan2f(vertical, planarX);
+    float cosShoulder = (L1 * L1 + distanceEval * distanceEval - L2 * L2) /
+                        (2.0f * L1 * distanceEval);
+    cosShoulder = clampf(cosShoulder, -1.0f, 1.0f);
+    float shoulderRad = angleToTarget + acosf(cosShoulder);
+    float shoulderDeg = toDegrees(shoulderRad);
+
+    float cosElbow = (L1 * L1 + L2 * L2 - distanceEval * distanceEval) /
+                     (2.0f * L1 * L2);
+    cosElbow = clampf(cosElbow, -1.0f, 1.0f);
+    float elbowRad = acosf(cosElbow);
+    float elbowDeg = toDegrees(elbowRad);
+
+    float shoulderClamped = clampf(shoulderDeg, shoulderLimits.minDeg, shoulderLimits.maxDeg);
+    float elbowClamped = clampf(elbowDeg, elbowLimits.minDeg, elbowLimits.maxDeg);
+    if (fabsf(shoulderClamped - shoulderDeg) > 1e-3f || fabsf(elbowClamped - elbowDeg) > 1e-3f) {
+        constrained = true;
+    }
+
+    shoulderRad = shoulderClamped * DEG_TO_RAD;
+    elbowRad = elbowClamped * DEG_TO_RAD;
+    float elbowAbsRad = shoulderRad - elbowRad;
+
+    float elbowLocalX = L1 * cosf(shoulderRad);
+    float elbowLocalY = L1 * sinf(shoulderRad);
+    float wristLocalX = elbowLocalX + L2 * cosf(elbowAbsRad);
+    float wristLocalY = elbowLocalY + L2 * sinf(elbowAbsRad);
+
+    Vec3 wristWorld{
+        cosYaw * wristLocalX,
+        wristLocalY,
+        sinYaw * wristLocalX
+    };
+
+    Vec3 elbowWorld{
+        cosYaw * elbowLocalX,
+        elbowLocalY,
+        sinYaw * elbowLocalX
+    };
+
+    Vec3 forearmDir{
+        wristWorld.x - elbowWorld.x,
+        wristWorld.y - elbowWorld.y,
+        wristWorld.z - elbowWorld.z
+    };
+
+    outSolution.joints.baseYawDeg = baseYawDeg;
     outSolution.joints.shoulderDeg = shoulderClamped;
     outSolution.joints.elbowDeg = elbowClamped;
-    outSolution.joints.elbowExtensionMm = extension;
-    outSolution.joints.gripperPitchDeg = pitchClamped;
-    outSolution.joints.gripperYawDeg = yawClamped;
-    outSolution.joints.gripperRollDeg = rollClamped;
-
-    outSolution.forearmLengthMm = forearmLength;
-    outSolution.wristDistanceMm = distanceForAngles;
-    outSolution.constrained = clamped;
-    outSolution.reachable = withinWorkspace && !clamped;
-
+    outSolution.joints.elbowExtensionMm = extensionMm;
+    outSolution.joints.gripperPitchDeg = 90.0f;
+    outSolution.joints.gripperYawDeg = 90.0f;
+    outSolution.joints.gripperRollDeg = config_.defaultGripperRollDeg;
+    outSolution.forearmLengthMm = L2;
+    outSolution.wristDistanceMm = distanceEval;
+    outSolution.wristTarget = wristWorld;
+    outSolution.toolDirection = normalise(forearmDir, config_.toolDirectionEpsilonMm);
+    outSolution.constrained = constrained;
+    outSolution.reachable = !constrained;
     return outSolution.reachable;
 }
 
 } // namespace IKEngine
+
 

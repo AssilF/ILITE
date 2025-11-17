@@ -1070,7 +1070,7 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
 
     // Elbow joint position
     float forearmLen = 170.0f + solution.joints.elbowExtensionMm;
-    float elbowAngleAbs = shoulderRad + elbowRad - PI;  // Absolute elbow angle
+    float elbowAngleAbs = shoulderRad - elbowRad;  // Absolute elbow angle
     float forearmDirX = cosf(elbowAngleAbs) * cosf(baseYawRad);
     float forearmDirY = cosf(elbowAngleAbs) * sinf(baseYawRad);
     float forearmDirZ = sinf(elbowAngleAbs);
@@ -1236,7 +1236,7 @@ static IKEngine::Vec3 estimateToolPosition(const ArmStatePacket& packet) {
     const float elbowRad = packet.servoDegrees[1] * DEG_TO_RAD;
     const float extensionMm = packet.extensionCentimeters * 10.0f;
     const float forearmLen = elbowBaseLen + extensionMm;
-    const float elbowAngleAbs = shoulderRad + elbowRad - PI;
+    const float elbowAngleAbs = shoulderRad - elbowRad;
 
     const float shoulderX = shoulderLen * cosf(shoulderRad) * cosf(baseYawRad);
     const float shoulderY = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
