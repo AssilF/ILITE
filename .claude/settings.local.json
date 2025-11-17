@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Read(//c/Users/DELL/**)",
-      "Bash(pio run:*)"
+      "Bash(pio run:*)",
+      "Bash(python -m platformio run:*)",
+      "Bash(platformio run:*)"
     ],
     "deny": [],
     "ask": []

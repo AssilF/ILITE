@@ -133,6 +133,9 @@ constexpr uint8_t BatteryLatch      = 0x40;
 constexpr uint8_t DriveArmed        = 0x80;
 } // namespace StatusFlag
 
+enum class GripperControlTarget : uint8_t;
+enum class ArmCameraView : uint8_t;
+
 struct ThegillRuntime {
   float targetLeftFront;
   float targetLeftRear;
@@ -154,6 +157,10 @@ struct ThegillRuntime {
   uint8_t pumpDuty;
   uint8_t userMask;
   uint8_t statusFlags;
+  float driveSpeedScalar;
+  float easingRate;
+  GripperControlTarget gripperTarget;
+  ArmCameraView cameraView;
 };
 
 extern ThegillCommand thegillCommand;
@@ -181,9 +188,10 @@ constexpr uint16_t Roll       = 1u << 4;
 constexpr uint16_t Yaw        = 1u << 5;
 constexpr uint16_t Gripper1   = 1u << 6;
 constexpr uint16_t Gripper2   = 1u << 7;
+constexpr uint16_t Base       = 1u << 8;
 constexpr uint16_t AllServos  = Shoulder | Elbow | Pitch | Roll | Yaw;
 constexpr uint16_t AllGrippers = Gripper1 | Gripper2;
-constexpr uint16_t AllOutputs = Extension | AllServos | AllGrippers;
+constexpr uint16_t AllOutputs = Extension | Base | AllServos | AllGrippers;
 } // namespace ArmCommandMask
 
 namespace ArmCommandFlag {
@@ -196,13 +204,14 @@ constexpr uint8_t DisableServos  = 0x08;
 struct ArmControlCommand {
     uint32_t magic;
     float extensionMillimeters;
+    float baseDegrees;
     float shoulderDegrees;
     float elbowDegrees;
     float pitchDegrees;
     float rollDegrees;
     float yawDegrees;
-    float gripper1Degrees;   // First gripper finger
-    float gripper2Degrees;   // Second gripper finger
+    float gripper1Degrees;   // First gripper finger command (-1=open, +1=close)
+    float gripper2Degrees;   // Second gripper finger command (-1=open, +1=close)
     uint16_t validMask;
     uint8_t flags;
     uint8_t reserved;
@@ -228,6 +237,12 @@ enum class ArmCameraView : uint8_t {
     OrbitHigh = 8,       ///< Elevated orbit looking down on the arm
     ShoulderClose = 9,   ///< Close-up around the shoulder joint
     RearQuarter = 10     ///< Over-the-shoulder rear-quarter view
+};
+
+enum class GripperControlTarget : uint8_t {
+    Both = 0,
+    Left = 1,
+    Right = 2
 };
 
 extern ArmControlCommand armCommand;
@@ -259,3 +274,5 @@ bool isArmStateSynced();
 void onThegillPaired();
 void onThegillUnpaired();
 void markThegillConfigDirty();
+void cycleControlMode();
+void cycleArmCameraView(int delta);

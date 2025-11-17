@@ -250,7 +250,6 @@ public:
     void drawDashboard(DisplayCanvas& canvas) override {
         const int16_t top = 14;  // Below top strip
 
-        // Check if we're in arm control mode
         if (mechIaneMode != MechIaneMode::DriveMode) {
             // Draw 3D arm visualization
             extern IKEngine::IKSolution lastArmSolution;
@@ -258,42 +257,58 @@ public:
 
             // Solve IK to get current solution
             extern IKEngine::Vec3 targetPosition;
-            extern IKEngine::Vec3 targetOrientation;
             extern IKEngine::InverseKinematics ikSolver;
             IKEngine::IKSolution solution;
-            ikSolver.solve(targetPosition, targetOrientation, solution);
+            ikSolver.solve(targetPosition, solution);
 
             draw3DArmVisualization(canvas, solution);
 
-            // Draw mode header
-            canvas.setFont(DisplayCanvas::SMALL);
-            const char* modeText = (mechIaneMode == MechIaneMode::ArmXYZ) ? "ARM: XYZ" : "ARM: ORI";
-            canvas.drawText(0, top, modeText);
-        } else {
-            canvas.setFont(DisplayCanvas::SMALL);
-            canvas.drawTextF(0, top, "Profile:%s", profileLabel(thegillConfig.profile));
-            canvas.drawTextF(0, top + 8, "Input:%s", easingLabel(thegillConfig.easing));
-            canvas.drawTextF(0, top + 16, "Battery:%u mV", thegillRuntime.batteryMillivolts);
-
-            const float leftTarget = 0.5f * (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear);
-            const float rightTarget = 0.5f * (thegillRuntime.targetRightFront + thegillRuntime.targetRightRear);
-            const float leftActual = 0.5f * (thegillRuntime.actualLeftFront + thegillRuntime.actualLeftRear);
-            const float rightActual = 0.5f * (thegillRuntime.actualRightFront + thegillRuntime.actualRightRear);
-
-            drawMotorBar(canvas, 40, top + 24, leftActual, leftTarget);
-            drawMotorBarLabels(canvas, 40, top + 24, leftTarget, leftActual);
-            drawMotorBar(canvas, 40, top + 38, rightActual, rightTarget);
-            drawMotorBarLabels(canvas, 40, top + 38, rightTarget, rightActual);
-
-            const bool linked = (thegillRuntime.statusFlags & StatusFlag::PairedLink) != 0;
-            drawStatusTag(canvas, 102, top, "DRV", thegillRuntime.driveEnabled);
-            drawStatusTag(canvas, 102, top + 10, "ARM", thegillRuntime.armOutputsEnabled);
-            drawStatusTag(canvas, 102, top + 20, "TEL", thegillRuntime.telemetryEnabled);
-            drawStatusTag(canvas, 102, top + 30, "FS", thegillRuntime.failsafeEnabled);
-            drawStatusTag(canvas, 102, top + 40, "LNK", linked);
-
-            canvas.drawTextF(0, top + 52, "Age:%ums Pump:%u", thegillRuntime.commandAgeMs, thegillRuntime.pumpDuty);
+            canvas.setFont(DisplayCanvas::TINY);
+            canvas.drawText(0, top, (mechIaneMode == MechIaneMode::ArmXYZ) ? "ARM XYZ" : "ARM ORI");
+            canvas.drawTextF(66, top, "Cam:%s", cameraViewLabel(thegillRuntime.cameraView));
+            canvas.drawTextF(0, 54, "Cmd:%ums", thegillRuntime.commandAgeMs);
+            canvas.drawTextF(0, 62, "Focus:%s", gripperFocusLabel(thegillRuntime.gripperTarget));
+            drawBatteryWidget(canvas, 74, 48);
+            return;
         }
+
+        canvas.setFont(DisplayCanvas::TINY);
+        int y = top;
+        canvas.drawTextF(0, y, "Profile:%s", profileLabel(thegillConfig.profile));
+        canvas.drawTextF(70, y, "Mode:%s", modeLabel(mechIaneMode));
+        y += 6;
+        canvas.drawTextF(0, y, "Speed:%3d%%",
+                         static_cast<int>(roundf(thegillRuntime.driveSpeedScalar * 100.0f)));
+        canvas.drawTextF(70, y, "Pump:%3u", thegillRuntime.pumpDuty);
+        y += 6;
+        canvas.drawTextF(0, y, "Ease:%s", easingLabel(thegillConfig.easing));
+        canvas.drawTextF(70, y, "Rate:%3d%%",
+                         static_cast<int>(roundf(thegillRuntime.easingRate * 100.0f)));
+        y += 6;
+        canvas.drawTextF(0, y, "Focus:%s", gripperFocusLabel(thegillRuntime.gripperTarget));
+        canvas.drawTextF(70, y, "Cam:%s", cameraViewLabel(thegillRuntime.cameraView));
+        y += 6;
+
+        const float leftTarget = 0.5f * (thegillRuntime.targetLeftFront + thegillRuntime.targetLeftRear);
+        const float rightTarget = 0.5f * (thegillRuntime.targetRightFront + thegillRuntime.targetRightRear);
+        const float leftActual = 0.5f * (thegillRuntime.actualLeftFront + thegillRuntime.actualLeftRear);
+        const float rightActual = 0.5f * (thegillRuntime.actualRightFront + thegillRuntime.actualRightRear);
+
+        drawMotorBar(canvas, 2, y, leftActual, leftTarget);
+        drawMotorBarLabels(canvas, 2, y, leftTarget, leftActual);
+        drawMotorBar(canvas, 2, y + 12, rightActual, rightTarget);
+        drawMotorBarLabels(canvas, 2, y + 12, rightTarget, rightActual);
+
+        const bool linked = (thegillRuntime.statusFlags & StatusFlag::PairedLink) != 0;
+        int tagY = top;
+        drawStatusTag(canvas, 100, tagY, "DRV", thegillRuntime.driveEnabled);
+        drawStatusTag(canvas, 100, tagY + 10, "ARM", thegillRuntime.armOutputsEnabled);
+        drawStatusTag(canvas, 100, tagY + 20, "TEL", thegillRuntime.telemetryEnabled);
+        drawStatusTag(canvas, 100, tagY + 30, "FS", thegillRuntime.failsafeEnabled);
+        drawStatusTag(canvas, 100, tagY + 40, "LNK", linked);
+
+        canvas.drawTextF(0, 60, "Cmd:%ums", thegillRuntime.commandAgeMs);
+        drawBatteryWidget(canvas, 64, 52);
     }
 
     void buildModuleMenu(ModuleMenuBuilder& builder) override {
@@ -437,6 +452,287 @@ public:
             },
             ICON_SETTINGS,
             &cameraMenu);
+
+        ModuleMenuItem& telemetryMenu = builder.addSubmenu("thegill.telemetry", "Telemetry", ICON_SIGNAL_FULL, &root);
+
+        ModuleMenuItem& statusMenu = builder.addSubmenu("thegill.telemetry.status", "Status Packet", ICON_SIGNAL_FULL, &telemetryMenu);
+        builder.addAction(
+            "thegill.telemetry.status.wheels",
+            "Wheel Speeds",
+            []() {},
+            ICON_SIGNAL_FULL,
+            &statusMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[48];
+                snprintf(buffer, sizeof(buffer), "LF:%d LR:%d RF:%d RR:%d",
+                         thegillStatusPacket.wheelSpeedMmPerSec[0],
+                         thegillStatusPacket.wheelSpeedMmPerSec[1],
+                         thegillStatusPacket.wheelSpeedMmPerSec[2],
+                         thegillStatusPacket.wheelSpeedMmPerSec[3]);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.status.battery",
+            "Battery",
+            []() {},
+            ICON_BATTERY_FULL,
+            &statusMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[32];
+                const uint16_t mv = thegillRuntime.batteryMillivolts;
+                const uint8_t pct = batteryPercent4S(mv);
+                snprintf(buffer, sizeof(buffer), "%umV (%u%%)", mv, pct);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.status.led",
+            "LED PWM",
+            []() {},
+            ICON_INFO,
+            &statusMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[24];
+                snprintf(buffer, sizeof(buffer), "%u/%u/%u",
+                         thegillRuntime.ledPwm[0],
+                         thegillRuntime.ledPwm[1],
+                         thegillRuntime.ledPwm[2]);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.status.pump",
+            "Pump Duty",
+            []() {},
+            ICON_INFO,
+            &statusMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                snprintf(buffer, sizeof(buffer), "%u", thegillRuntime.pumpDuty);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.status.user",
+            "User Mask",
+            []() {},
+            ICON_INFO,
+            &statusMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                snprintf(buffer, sizeof(buffer), "0x%02X", thegillRuntime.userMask);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.status.flags",
+            "Status Flags",
+            []() {},
+            ICON_INFO,
+            &statusMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                return formatStatusFlags(thegillRuntime.statusFlags);
+            });
+
+        builder.addAction(
+            "thegill.telemetry.status.command_age",
+            "Command Age",
+            []() {},
+            ICON_INFO,
+            &statusMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                snprintf(buffer, sizeof(buffer), "%ums", thegillRuntime.commandAgeMs);
+                return buffer;
+            });
+
+        ModuleMenuItem& armStateMenu = builder.addSubmenu("thegill.telemetry.arm", "Arm State", ICON_ROBOT, &telemetryMenu);
+        builder.addAction(
+            "thegill.telemetry.arm.base",
+            "Base",
+            []() {},
+            ICON_ROBOT,
+            &armStateMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                snprintf(buffer, sizeof(buffer), "%.1f deg", thegillArmStatePacket.baseDegrees);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.arm.extension",
+            "Extension",
+            []() {},
+            ICON_ROBOT,
+            &armStateMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                snprintf(buffer, sizeof(buffer), "%.1fcm", thegillArmStatePacket.extensionCentimeters);
+                return buffer;
+            });
+
+        const char* servoLabels[] = {"Shoulder", "Elbow", "Pitch", "Roll", "Yaw"};
+        for (size_t i = 0; i < 5; ++i) {
+            char id[48];
+            snprintf(id, sizeof(id), "thegill.telemetry.arm.servo.%zu", i);
+            builder.addAction(
+                id,
+                servoLabels[i],
+                []() {},
+                ICON_INFO,
+                &armStateMenu,
+                static_cast<int>(i),
+                nullptr,
+                [i]() -> const char* {
+                    static char buffer[16];
+                    snprintf(buffer, sizeof(buffer), "%.1f deg", thegillArmStatePacket.servoDegrees[i]);
+                    return buffer;
+                });
+        }
+
+        builder.addAction(
+            "thegill.telemetry.arm.enabled",
+            "Servo Enabled",
+            []() {},
+            ICON_INFO,
+            &armStateMenu,
+            10,
+            nullptr,
+            []() -> const char* {
+                static char buffer[12];
+                writeServoMask(thegillArmStatePacket.servoEnabledMask, buffer, sizeof(buffer));
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.arm.attached",
+            "Servo Attached",
+            []() {},
+            ICON_INFO,
+            &armStateMenu,
+            11,
+            nullptr,
+            []() -> const char* {
+                static char buffer[12];
+                writeServoMask(thegillArmStatePacket.servoAttachedMask, buffer, sizeof(buffer));
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.arm.flags",
+            "Arm Flags",
+            []() {},
+            ICON_INFO,
+            &armStateMenu,
+            12,
+            nullptr,
+            []() -> const char* {
+                return formatArmFlags(thegillArmStatePacket.flags);
+            });
+
+        ModuleMenuItem& configMenu = builder.addSubmenu("thegill.telemetry.config", "Configuration", ICON_SETTINGS, &telemetryMenu);
+        builder.addAction(
+            "thegill.telemetry.config.easing_mode",
+            "Easing Mode",
+            []() {},
+            ICON_SETTINGS,
+            &configMenu,
+            0,
+            nullptr,
+            []() -> const char* {
+                static const char* labels[] = {"None", "Slew Rate", "Exponential"};
+                uint8_t mode = thegillConfigurationPacket.easingMode;
+                if (mode < (sizeof(labels) / sizeof(labels[0]))) {
+                    return labels[mode];
+                }
+                return "Unknown";
+            });
+
+        builder.addAction(
+            "thegill.telemetry.config.easing_rate",
+            "Easing Strength",
+            []() {},
+            ICON_SETTINGS,
+            &configMenu,
+            1,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                const float pct = (thegillConfigurationPacket.easingRate / 255.0f) * 100.0f;
+                snprintf(buffer, sizeof(buffer), "%.0f%%", pct);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.config.control",
+            "Control Flags",
+            []() {},
+            ICON_INFO,
+            &configMenu,
+            2,
+            nullptr,
+            []() -> const char* {
+                return formatControlFlags(thegillConfigurationPacket.controlFlags);
+            });
+
+        builder.addAction(
+            "thegill.telemetry.config.safety",
+            "Safety Flags",
+            []() {},
+            ICON_INFO,
+            &configMenu,
+            3,
+            nullptr,
+            []() -> const char* {
+                return formatSafetyFlags(thegillConfigurationPacket.safetyFlags);
+            });
+
+        builder.addAction(
+            "thegill.telemetry.config.cutoff",
+            "Battery Cutoff",
+            []() {},
+            ICON_BATTERY_FULL,
+            &configMenu,
+            4,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                snprintf(buffer, sizeof(buffer), "%umV", thegillConfigurationPacket.batteryCutoffMillivolts);
+                return buffer;
+            });
+
+        builder.addAction(
+            "thegill.telemetry.config.recover",
+            "Battery Recover",
+            []() {},
+            ICON_BATTERY_FULL,
+            &configMenu,
+            5,
+            nullptr,
+            []() -> const char* {
+                static char buffer[16];
+                snprintf(buffer, sizeof(buffer), "%umV", thegillConfigurationPacket.batteryRecoverMillivolts);
+                return buffer;
+            });
     }
 
 private:
@@ -577,6 +873,41 @@ private:
         snprintf(buffer, size, "%+d%%", percent);
     }
 
+    const char* modeLabel(MechIaneMode mode) const {
+        switch (mode) {
+            case MechIaneMode::DriveMode: return "Drive";
+            case MechIaneMode::ArmXYZ: return "Arm XYZ";
+            case MechIaneMode::ArmOrientation: return "Arm ORI";
+        }
+        return "Unknown";
+    }
+
+    const char* gripperFocusLabel(GripperControlTarget target) const {
+        switch (target) {
+            case GripperControlTarget::Both: return "Both";
+            case GripperControlTarget::Left: return "Left";
+            case GripperControlTarget::Right: return "Right";
+        }
+        return "Both";
+    }
+
+    const char* cameraViewLabel(ArmCameraView view) const {
+        switch (view) {
+            case ArmCameraView::TopLeftCorner: return "TL";
+            case ArmCameraView::ThirdPerson: return "3P";
+            case ArmCameraView::Overhead: return "OH";
+            case ArmCameraView::Side: return "Side";
+            case ArmCameraView::Front: return "Front";
+            case ArmCameraView::OperatorLeft: return "OpL";
+            case ArmCameraView::OperatorRight: return "OpR";
+            case ArmCameraView::ToolTip: return "Tip";
+            case ArmCameraView::OrbitHigh: return "Orb";
+            case ArmCameraView::ShoulderClose: return "Shld";
+            case ArmCameraView::RearQuarter: return "Rear";
+        }
+        return "Cam";
+    }
+
     void drawStatusTag(DisplayCanvas& canvas, int x, int y, const char* label, bool active) {
         const int width = 24;
         const int height = 9;
@@ -591,6 +922,123 @@ private:
         }
     }
 
+    static void appendFlagLabel(char* buffer, size_t size, bool active, const char* label) {
+        if (!active || size == 0 || label == nullptr) {
+            return;
+        }
+        size_t len = strlen(buffer);
+        if (len >= size - 1) {
+            return;
+        }
+        snprintf(buffer + len, size - len, "%s%s", (len > 0) ? " " : "", label);
+    }
+
+    static const char* formatStatusFlags(uint8_t flags) {
+        static char buffer[48];
+        buffer[0] = '\0';
+        appendFlagLabel(buffer, sizeof(buffer), (flags & StatusFlag::DriveArmed) != 0, "Drive");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & StatusFlag::ArmOutputsEnabled) != 0, "Arm");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & StatusFlag::TelemetryOn) != 0, "Tel");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & StatusFlag::FailsafeArmed) != 0, "FS");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & StatusFlag::PairedLink) != 0, "Link");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & StatusFlag::BatteryLatch) != 0, "Batt");
+        if (buffer[0] == '\0') {
+            snprintf(buffer, sizeof(buffer), "%s", "None");
+        }
+        return buffer;
+    }
+
+    static const char* formatControlFlags(uint8_t flags) {
+        static char buffer[48];
+        buffer[0] = '\0';
+        appendFlagLabel(buffer, sizeof(buffer), (flags & ConfigFlag::DriveEnabled) != 0, "Drive");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & ConfigFlag::ArmOutputs) != 0, "Arm");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & ConfigFlag::FailsafeEnable) != 0, "Failsafe");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & ConfigFlag::MuteAudio) != 0, "Mute");
+        if (buffer[0] == '\0') {
+            snprintf(buffer, sizeof(buffer), "%s", "None");
+        }
+        return buffer;
+    }
+
+    static const char* formatSafetyFlags(uint8_t flags) {
+        static char buffer[24];
+        buffer[0] = '\0';
+        appendFlagLabel(buffer, sizeof(buffer), (flags & SafetyFlag::BatterySafety) != 0, "Battery");
+        if (buffer[0] == '\0') {
+            snprintf(buffer, sizeof(buffer), "%s", "None");
+        }
+        return buffer;
+    }
+
+    static const char* formatArmFlags(uint8_t flags) {
+        static char buffer[32];
+        buffer[0] = '\0';
+        appendFlagLabel(buffer, sizeof(buffer), (flags & 0x01) != 0, "Outputs");
+        appendFlagLabel(buffer, sizeof(buffer), (flags & 0x02) != 0, "Servos");
+        if (buffer[0] == '\0') {
+            snprintf(buffer, sizeof(buffer), "%s", "None");
+        }
+        return buffer;
+    }
+
+    static void writeServoMask(uint8_t mask, char* buffer, size_t size) {
+        if (size < 3) {
+            return;
+        }
+        buffer[0] = '0';
+        buffer[1] = 'b';
+        size_t digits = (size - 2 > 8) ? 8 : (size - 2);
+        for (size_t i = 0; i < digits; ++i) {
+            buffer[2 + i] = (mask & (1u << (7 - i))) ? '1' : '0';
+        }
+        buffer[2 + digits] = '\0';
+    }
+
+    static uint8_t batteryPercent4S(uint16_t millivolts) {
+        if (millivolts == 0) {
+            return 0;
+        }
+        float perCell = (static_cast<float>(millivolts) / 1000.0f) / 4.0f;
+        if (perCell >= 4.2f) {
+            return 100;
+        } else if (perCell >= 4.0f) {
+            return static_cast<uint8_t>(90.0f + ((perCell - 4.0f) / 0.2f) * 10.0f);
+        } else if (perCell >= 3.85f) {
+            return static_cast<uint8_t>(75.0f + ((perCell - 3.85f) / 0.15f) * 15.0f);
+        } else if (perCell >= 3.7f) {
+            return static_cast<uint8_t>(50.0f + ((perCell - 3.7f) / 0.15f) * 25.0f);
+        } else if (perCell >= 3.5f) {
+            return static_cast<uint8_t>(25.0f + ((perCell - 3.5f) / 0.2f) * 25.0f);
+        } else if (perCell >= 3.3f) {
+            return static_cast<uint8_t>(10.0f + ((perCell - 3.3f) / 0.2f) * 15.0f);
+        } else if (perCell <= 3.0f) {
+            return 0;
+        }
+        return static_cast<uint8_t>(((perCell - 3.0f) / 0.3f) * 10.0f);
+    }
+
+    void drawBatteryWidget(DisplayCanvas& canvas, int16_t x, int16_t y) const {
+        const uint16_t millivolts = thegillRuntime.batteryMillivolts;
+        const uint8_t percent = batteryPercent4S(millivolts);
+        const int width = 46;
+        const int height = 9;
+        canvas.drawRect(x, y, width, height, false);
+        const int fillWidth = static_cast<int>((width - 2) * percent / 100);
+        if (fillWidth > 0) {
+            canvas.drawRect(x + 1, y + 1, fillWidth, height - 2, true);
+        }
+        canvas.drawRect(x + width, y + height / 4, 3, height / 2, false);
+        canvas.setFont(DisplayCanvas::TINY);
+        if (millivolts > 0) {
+            canvas.drawTextF(x, y - 6, "%.1fV", millivolts / 1000.0f);
+            canvas.drawTextF(x + width + 6, y + height - 1, "%u%%", percent);
+        } else {
+            canvas.drawText(x, y - 6, "Batt:--");
+            canvas.drawText(x + width + 6, y + height - 1, "--%");
+        }
+    }
+
     // ============================================================================
     // Framework v2.0 Support - Button Events & Encoder Functions
     // ============================================================================
@@ -599,146 +1047,27 @@ private:
         // Register encoder functions when module activates
         FrameworkEngine& fw = FrameworkEngine::getInstance();
 
-        // F1: Toggle XYZ/Orientation (only active in Arm mode)
         EncoderFunction f1;
-        f1.label = "CTRL";  // Control mode (XYZ vs Orientation)
-        f1.fullName = "Toggle XYZ/Orient";
-        f1.callback = [this]() {
-            // Only active in arm mode
-            if (mechIaneMode != MechIaneMode::DriveMode) {
-                if (mechIaneMode == MechIaneMode::ArmXYZ) {
-                    mechIaneMode = MechIaneMode::ArmOrientation;
-                    requestOrientationRetarget();
-                } else {
-                    mechIaneMode = MechIaneMode::ArmXYZ;
-                }
-                AudioRegistry::play("menu_select");
-            } else {
-                // In drive mode, F1 does nothing (could add feedback sound)
-                AudioRegistry::play("error");
-            }
+        f1.label = "MODE";
+        f1.fullName = "Control Mode";
+        f1.callback = []() {
+            cycleControlMode();
         };
         f1.isToggle = false;
         f1.toggleState = nullptr;
         fw.setEncoderFunction(0, f1);
 
-        // F2: Toggle ARM/DRIVE modes
         EncoderFunction f2;
-        f2.label = "MODE";  // Mode switch (Arm vs Drive)
-        f2.fullName = "Toggle Arm/Drive";
-        f2.callback = [this]() {
-            if (mechIaneMode == MechIaneMode::DriveMode) {
-                mechIaneMode = MechIaneMode::ArmXYZ;
-            } else {
-                mechIaneMode = MechIaneMode::DriveMode;
-            }
-            AudioRegistry::play("menu_select");
+        f2.label = "CAM";
+        f2.fullName = "Arm Camera View";
+        f2.callback = []() {
+            cycleArmCameraView(1);
         };
         f2.isToggle = false;
         f2.toggleState = nullptr;
         fw.setEncoderFunction(1, f2);
 
-        // Register button bindings
-        // Button 3: Gripper + profile cycle
-        ControlBinding gripperToggle;
-        gripperToggle.input = INPUT_BUTTON3;
-        gripperToggle.event = EVENT_PRESS;
-        gripperToggle.action = []() {
-            if (mechIaneMode != MechIaneMode::DriveMode) {
-                toggleUnifiedGripper();
-                AudioRegistry::play("menu_select");
-            }
-        };
-        gripperToggle.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
-        ControlBindingSystem::registerBinding(gripperToggle);
-
-        ControlBinding profileCycle;
-        profileCycle.input = INPUT_BUTTON3;
-        profileCycle.event = EVENT_LONG_PRESS;
-        profileCycle.action = [this]() {
-            const GillDriveProfile next =
-                (thegillConfig.profile == GillDriveProfile::Tank)
-                    ? GillDriveProfile::Differential
-                    : GillDriveProfile::Tank;
-            setDriveProfile(next);
-            AudioRegistry::play("paired");
-        };
-        ControlBindingSystem::registerBinding(profileCycle);
-
-        // Joystick A Button: Toggle XYZ/Orientation control (only in arm mode)
-        ControlBinding binding2;
-        binding2.input = INPUT_JOYSTICK_A_BUTTON;
-        binding2.event = EVENT_PRESS;
-        binding2.action = []() {
-            if (mechIaneMode == MechIaneMode::ArmXYZ) {
-                mechIaneMode = MechIaneMode::ArmOrientation;
-                requestOrientationRetarget();
-                AudioRegistry::play("menu_select");
-            } else if (mechIaneMode == MechIaneMode::ArmOrientation) {
-                mechIaneMode = MechIaneMode::ArmXYZ;
-                AudioRegistry::play("menu_select");
-            }
-        };
-        binding2.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
-        ControlBindingSystem::registerBinding(binding2);
-
-        // Joystick B Button: Toggle precision mode for fine manipulation
-        ControlBinding precisionBinding;
-        precisionBinding.input = INPUT_JOYSTICK_B_BUTTON;
-        precisionBinding.event = EVENT_PRESS;
-        precisionBinding.action = []() {
-            setPrecisionMode(!isPrecisionModeEnabled());
-            AudioRegistry::play("toggle");
-            Serial.printf("[TheGillModule] Precision mode %s\n", isPrecisionModeEnabled() ? "ENABLED" : "DISABLED");
-        };
-        ControlBindingSystem::registerBinding(precisionBinding);
-
-        // Button 2 long press: Reset orientation reference and wrist roll
-        ControlBinding orientationReset;
-        orientationReset.input = INPUT_BUTTON2;
-        orientationReset.event = EVENT_LONG_PRESS;
-        orientationReset.action = []() {
-            requestOrientationRetarget();
-            setTargetToolRoll(90.0f);
-            AudioRegistry::play("menu_back");
-            Serial.println("[TheGillModule] Orientation reset");
-        };
-        ControlBindingSystem::registerBinding(orientationReset);
-
-        // Joystick B long press: Snap gripper closed for safety
-        ControlBinding safeClose;
-        safeClose.input = INPUT_JOYSTICK_B_BUTTON;
-        safeClose.event = EVENT_LONG_PRESS;
-        safeClose.action = []() {
-            setUnifiedGripper(false);
-            AudioRegistry::play("menu_select");
-            Serial.println("[TheGillModule] Gripper safety close");
-        };
-        ControlBindingSystem::registerBinding(safeClose);
-
-        // Joystick B double click: Finger 1 macro
-        ControlBinding finger1Trim;
-        finger1Trim.input = INPUT_JOYSTICK_B_BUTTON;
-        finger1Trim.event = EVENT_DOUBLE_CLICK;
-        finger1Trim.action = []() {
-            setGripperFingerPosition(0, isGripperOpen() ? 30.0f : 70.0f);
-            AudioRegistry::play("edit_adjust");
-        };
-        finger1Trim.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
-        ControlBindingSystem::registerBinding(finger1Trim);
-
-        // Button 3 double click: Individual finger trim (finger 2 closes)
-        ControlBinding finger2Trim;
-        finger2Trim.input = INPUT_BUTTON3;
-        finger2Trim.event = EVENT_DOUBLE_CLICK;
-        finger2Trim.action = []() {
-            setGripperFingerPosition(1, isGripperOpen() ? 120.0f : 80.0f);
-            AudioRegistry::play("edit_adjust");
-        };
-        finger2Trim.condition = []() { return mechIaneMode != MechIaneMode::DriveMode; };
-        ControlBindingSystem::registerBinding(finger2Trim);
-
-        Serial.println("[TheGillModule] Activated with encoder functions and button bindings");
+        Serial.println("[TheGillModule] Activated with encoder functions");
     }
 
     void onDeactivate() override {
@@ -753,49 +1082,6 @@ private:
         Serial.println("[TheGillModule] Deactivated");
     }
 
-    void onButtonEvent(size_t buttonIndex, int event) override {
-        ButtonEvent evt = static_cast<ButtonEvent>(event);
-
-        switch (buttonIndex) {
-            case 0: // Button 1 - Brake
-                if (evt == ButtonEvent::PRESSED) {
-                    thegillCommand.flags |= GillCommandFlag_Brake;
-                    thegillRuntime.brakeActive = true;
-                    AudioRegistry::play("menu_select");
-                } else if (evt == ButtonEvent::RELEASED) {
-                    thegillCommand.flags &= ~GillCommandFlag_Brake;
-                    thegillRuntime.brakeActive = false;
-                }
-                break;
-
-            case 1: // Button 2 - Honk
-                if (evt == ButtonEvent::PRESSED) {
-                    thegillCommand.flags |= GillCommandFlag_Honk;
-                    thegillRuntime.honkActive = true;
-                    AudioRegistry::play("paired");
-                } else if (evt == ButtonEvent::RELEASED) {
-                    thegillCommand.flags &= ~GillCommandFlag_Honk;
-                    thegillRuntime.honkActive = false;
-                }
-                break;
-
-            case 2: // Button 3 - Toggle Mode (long press)
-                if (evt == ButtonEvent::PRESSED) {
-                    if (mechIaneMode != MechIaneMode::DriveMode) {
-                        toggleUnifiedGripper();
-                        AudioRegistry::play("menu_select");
-                    }
-                } else if (evt == ButtonEvent::LONG_PRESS) {
-                    GillDriveProfile next =
-                        (thegillConfig.profile == GillDriveProfile::Tank)
-                            ? GillDriveProfile::Differential
-                            : GillDriveProfile::Tank;
-                    setDriveProfile(next);
-                    AudioRegistry::play("paired");
-                }
-                break;
-        }
-    }
 };
 
 // ============================================================================
@@ -1799,11 +2085,13 @@ static void registerModuleMenuEntries() {
         entry.label = module->getModuleName();
         entry.shortLabel = nullptr;
         entry.onSelect = [module]() {
+            if (module == nullptr) {
+                return;
+            }
             Serial.printf("[ModuleRegistration] Loading module: %s\n", module->getModuleName());
-            FrameworkEngine& fw = FrameworkEngine::getInstance();
-            fw.loadModule(module);
-            // Close menu after loading module (menu will be rebuilt with module's entries)
-            fw.closeMenu();
+            ILITEFramework& app = ILITEFramework::getInstance();
+            app.requestModuleActivation(module);
+            FrameworkEngine::getInstance().closeMenu();
             AudioRegistry::play("paired");
         };
         entry.condition = nullptr;

@@ -39,6 +39,20 @@ static char terminalCommandBuffer[64] = "";
 static char terminalStatusMessage[32] = "";
 static uint32_t terminalStatusTimestamp = 0;
 
+static void refreshDiscoveryScanMode() {
+    const bool browsingDevices = (currentScreen == ActiveScreen::DEVICES) ||
+                                 (currentScreen == ActiveScreen::DEVICE_INFO);
+    discovery.setContinuousScanning(browsingDevices);
+    discovery.setAutoPairEnabled(!browsingDevices);
+    if (browsingDevices) {
+        discovery.setDiscoveryEnabled(true);
+    } else if (discovery.isPaired()) {
+        discovery.setDiscoveryEnabled(false);
+    } else {
+        discovery.setDiscoveryEnabled(true);
+    }
+}
+
 void submitTerminalCommand(const char* command) {
     if (command == nullptr || command[0] == '\0') {
         AudioRegistry::play("error");
@@ -101,6 +115,7 @@ void showTerminal() {
         selectedItem = 0;
         AudioRegistry::play("menu_select");
         Serial.println("[DefaultActions] Terminal screen opened");
+        refreshDiscoveryScanMode();
     }
 }
 
@@ -113,6 +128,7 @@ void openDevices() {
         deviceDetailAction = 0;
         AudioRegistry::play("menu_select");
         Serial.println("[DefaultActions] Devices screen opened");
+        refreshDiscoveryScanMode();
     }
 }
 
@@ -123,6 +139,7 @@ void openSettings() {
         selectedItem = 0;
         AudioRegistry::play("menu_select");
         Serial.println("[DefaultActions] Settings screen opened");
+        refreshDiscoveryScanMode();
     }
 }
 
@@ -147,6 +164,7 @@ void closeActiveScreen() {
         deviceDetailAction = 0;
         AudioRegistry::play("menu_select");
         Serial.println("[DefaultActions] Screen closed, returning to dashboard");
+        refreshDiscoveryScanMode();
     }
 }
 
@@ -461,6 +479,7 @@ void handleEncoderRotate(int delta) {
                 currentScreen = ActiveScreen::DEVICES;
                 deviceDetailIndex = -1;
                 deviceDetailAction = 0;
+                refreshDiscoveryScanMode();
                 return;
             }
             deviceDetailAction += delta;
@@ -517,6 +536,7 @@ void handleEncoderPress() {
                 deviceDetailAction = (deviceDetailIndex == discovery.getPairedPeerIndex()) ? 1 : 0;
                 currentScreen = ActiveScreen::DEVICE_INFO;
                 AudioRegistry::play("menu_select");
+                refreshDiscoveryScanMode();
             }
             break;
 
@@ -526,6 +546,7 @@ void handleEncoderPress() {
                 if (deviceDetailIndex < 0 || deviceDetailIndex >= deviceCount) {
                     AudioRegistry::play("error");
                     currentScreen = ActiveScreen::DEVICES;
+                    refreshDiscoveryScanMode();
                     break;
                 }
 
@@ -543,11 +564,13 @@ void handleEncoderPress() {
                 currentScreen = ActiveScreen::DEVICES;
                 deviceDetailIndex = -1;
                 deviceDetailAction = 0;
+                refreshDiscoveryScanMode();
             } else {
                 AudioRegistry::play("menu_back");
                 currentScreen = ActiveScreen::DEVICES;
                 deviceDetailIndex = -1;
                 deviceDetailAction = 0;
+                refreshDiscoveryScanMode();
             }
             break;
 

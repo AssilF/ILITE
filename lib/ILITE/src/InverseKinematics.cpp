@@ -164,7 +164,7 @@ bool InverseKinematics::solveInternal(const Vec3& target, const Vec3* toolDir, I
     cosElbowTerm = clampf(cosElbowTerm, -1.0f, 1.0f);
 
     float elbowRad = acosf(cosElbowTerm);
-    float elbowDeg = toDegrees(elbowRad);
+    float elbowDeg = toDegrees(elbowRad) - 90.0f;
 
     float horizontalTool = sqrtf(workingToolDir.x * workingToolDir.x + workingToolDir.y * workingToolDir.y);
     float gripperPitch = 90.0f + toDegrees(atan2f(workingToolDir.z, horizontalTool));

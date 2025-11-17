@@ -548,18 +548,28 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
         const uint8_t buttonHeight = 8;
         const uint8_t buttonY = stripY + 1;
 
+        auto drawButton = [&](uint8_t x, const char* label, bool selected, bool showIndicator, bool indicatorActive) {
+            canvas.drawRect(x, buttonY, buttonWidth, buttonHeight, selected);
+            if (selected) {
+                canvas.setDrawColor(0);
+            }
+            canvas.drawText(x + 2, buttonY + 6, label);
+            if (selected) {
+                canvas.setDrawColor(1);
+            }
+            if (showIndicator && indicatorActive) {
+                uint8_t indicatorSize = 2;
+                canvas.drawRect(x + buttonWidth - indicatorSize - 1,
+                                buttonY + 1,
+                                indicatorSize,
+                                indicatorSize,
+                                true);
+            }
+        };
+
         // Menu button (visible when not in menu)
         bool menuSelected = (selectedStripButton_ == StripButton::MENU);
-
-        // Draw outlined box (always)
-        canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
-
-        // Draw MENU text
-        canvas.setFont(DisplayCanvas::TINY);
-        if (menuSelected) {
-            drawBlinkUnderline(canvas, buttonX + 2, buttonY + buttonHeight - 1, buttonWidth - 4);
-        }
-        canvas.drawText(buttonX + 2, buttonY + 6, "MENU");
+        drawButton(buttonX, "MENU", menuSelected, false, false);
 
         buttonX += buttonWidth + buttonSpacing;
 
@@ -568,27 +578,8 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             bool f1Selected = (selectedStripButton_ == StripButton::FUNCTION_1);
             bool f1Toggle = encoderFunctions_[0].isToggle;
             bool f1Active = f1Toggle && encoderFunctions_[0].toggleState && *encoderFunctions_[0].toggleState;
-
-            // Draw outlined box
-            canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
-
-            // Draw label
-            if (f1Selected) {
-                drawBlinkUnderline(canvas, buttonX + 3, buttonY + buttonHeight - 1, buttonWidth - 6);
-            }
-            canvas.drawText(buttonX + 3, buttonY + 6, encoderFunctions_[0].label);
-
-            // Draw toggle indicator (small square in top-right corner)
-            if (f1Toggle && f1Active) {
-                // Draw a small filled square in the corner to indicate active toggle
-                uint8_t indicatorSize = 2;
-                canvas.drawRect(buttonX + buttonWidth - indicatorSize - 1,
-                               buttonY + 1,
-                               indicatorSize,
-                               indicatorSize,
-                               true);
-            }
-
+            drawButton(buttonX, encoderFunctions_[0].label ? encoderFunctions_[0].label : "F1",
+                       f1Selected, f1Toggle, f1Active);
             buttonX += buttonWidth + buttonSpacing;
         }
 
@@ -597,27 +588,8 @@ void FrameworkEngine::renderTopStrip(DisplayCanvas& canvas) {
             bool f2Selected = (selectedStripButton_ == StripButton::FUNCTION_2);
             bool f2Toggle = encoderFunctions_[1].isToggle;
             bool f2Active = f2Toggle && encoderFunctions_[1].toggleState && *encoderFunctions_[1].toggleState;
-
-            // Draw outlined box
-            canvas.drawRect(buttonX, buttonY, buttonWidth, buttonHeight, false);
-
-            // Draw label
-            if (f2Selected) {
-                drawBlinkUnderline(canvas, buttonX + 3, buttonY + buttonHeight - 1, buttonWidth - 6);
-            }
-            canvas.drawText(buttonX + 3, buttonY + 6, encoderFunctions_[1].label);
-
-            // Draw toggle indicator (small square in top-right corner)
-            if (f2Toggle && f2Active) {
-                // Draw a small filled square in the corner to indicate active toggle
-                uint8_t indicatorSize = 2;
-                canvas.drawRect(buttonX + buttonWidth - indicatorSize - 1,
-                               buttonY + 1,
-                               indicatorSize,
-                               indicatorSize,
-                               true);
-            }
-
+            drawButton(buttonX, encoderFunctions_[1].label ? encoderFunctions_[1].label : "F2",
+                       f2Selected, f2Toggle, f2Active);
             buttonX += buttonWidth + buttonSpacing;
         }
 

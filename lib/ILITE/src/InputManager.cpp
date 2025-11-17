@@ -86,6 +86,18 @@ void InputManager::begin() {
     }, RISING);
 
     Serial.println("[InputManager] Initialized");
+
+    // Verify pull-ups are working - should read HIGH (3.3V) when not pressed
+    delay(100);
+    Serial.println("[InputManager] Pull-up verification:");
+    Serial.printf("  Joystick A Button (GPIO %d): %s (should be HIGH)\n",
+                  joystickBtnA, digitalRead(joystickBtnA) == HIGH ? "HIGH" : "LOW");
+    Serial.printf("  Joystick B Button (GPIO %d): %s (should be HIGH)\n",
+                  joystickBtnB, digitalRead(joystickBtnB) == HIGH ? "HIGH" : "LOW");
+    Serial.printf("  Button 1 (GPIO %d): %s\n", button1, digitalRead(button1) == HIGH ? "HIGH" : "LOW");
+    Serial.printf("  Button 2 (GPIO %d): %s\n", button2, digitalRead(button2) == HIGH ? "HIGH" : "LOW");
+    Serial.printf("  Button 3 (GPIO %d): %s\n", button3, digitalRead(button3) == HIGH ? "HIGH" : "LOW");
+    Serial.println("[InputManager] If any button shows LOW, check wiring or add external pull-up resistor");
 }
 
 // ============================================================================

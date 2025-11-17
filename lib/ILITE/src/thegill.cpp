@@ -1,6 +1,7 @@
 ﻿#include "thegill.h"
 #include "ILITEModule.h"
 #include "ModuleRegistry.h"
+#include "AudioRegistry.h"
 #include "InputManager.h"
 #include "DisplayCanvas.h"
 #include "InverseKinematics.h"
@@ -13,6 +14,9 @@ namespace {
 constexpr int16_t kMaxWheelCommand = 1000;
 constexpr float kMinDriveScale = 0.35f;
 constexpr float kMaxDriveScale = 1.0f;
+constexpr float kMinArmSpeedScalar = 0.2f;
+constexpr float kMaxArmSpeedScalar = 1.0f;
+constexpr uint8_t kMaxPumpDuty = 200;
 constexpr uint32_t kPeripheralIntervalMs = 120;
 constexpr uint32_t kConfigMinIntervalMs = 1000;
 constexpr uint32_t kArmStateRequestIntervalMs = 250;
@@ -78,6 +82,13 @@ ThegillConfig thegillConfig{
   0.35f
 };
 
+static float driveSpeedScalar = 0.85f;
+static float armSpeedScalar = 0.6f;
+enum class PotTarget { DriveSpeed, Pump, Led1, ArmSpeed };
+static PotTarget potTarget = PotTarget::DriveSpeed;
+static bool pumpTargetActive = false;
+static bool ledTargetActive = false;
+
 ThegillRuntime thegillRuntime{
   0.f, 0.f, 0.f, 0.f,
   0.f, 0.f, 0.f, 0.f,
@@ -92,7 +103,11 @@ ThegillRuntime thegillRuntime{
   {0, 0, 0},
   0,
   0,
-  0
+  0,
+  driveSpeedScalar,
+  thegillConfig.easingRate,
+  GripperControlTarget::Both,
+  ArmCameraView::TopLeftCorner
 };
 
 static bool precisionMode = false;
@@ -128,18 +143,20 @@ static bool updateByte(uint8_t& target, uint8_t value) {
     return true;
 }
 
-static void refreshPeripheralState(float driveMagnitude, float potValue) {
+static void refreshPeripheralState(float driveMagnitude) {
     bool changed = false;
     const uint8_t driveLed = static_cast<uint8_t>(constrain(driveMagnitude, 0.0f, 1.0f) * 255.0f);
     const uint8_t armLed = isArmStateSynced() ? 220 : 90;
     const uint8_t gripperLed = isGripperOpen() ? 230 : 80;
 
-    changed |= updateByte(thegillPeripheralCommand.ledPwm[0], driveLed);
+    if (!ledTargetActive) {
+        changed |= updateByte(thegillPeripheralCommand.ledPwm[0], driveLed);
+        thegillRuntime.ledPwm[0] = thegillPeripheralCommand.ledPwm[0];
+    }
     changed |= updateByte(thegillPeripheralCommand.ledPwm[1], armLed);
     changed |= updateByte(thegillPeripheralCommand.ledPwm[2], gripperLed);
-
-    const uint8_t pumpDuty = static_cast<uint8_t>(constrain(potValue, 0.0f, 1.0f) * 200.0f);
-    changed |= updateByte(thegillPeripheralCommand.pumpDuty, pumpDuty);
+    thegillRuntime.ledPwm[1] = thegillPeripheralCommand.ledPwm[1];
+    thegillRuntime.ledPwm[2] = thegillPeripheralCommand.ledPwm[2];
 
     uint8_t mask = 0;
     if (thegillRuntime.brakeActive) mask |= 0x01;
@@ -192,9 +209,12 @@ static void syncConfigurationPacket() {
 }
 
 // Mech'Iane Arm Control State
+static constexpr float kGripperOpenDeg = 0.0f;
+static constexpr float kGripperClosedDeg = 180.0f;
+static constexpr float kGripperNeutralDeg = 90.0f;
 ArmControlCommand armCommand{
   ARM_COMMAND_MAGIC,
-  0.0f, 90.0f, 90.0f, 90.0f, 90.0f, 90.0f, 90.0f, 90.0f,
+  0.0f, 0.0f, 90.0f, 90.0f, 90.0f, 90.0f, 90.0f, kGripperNeutralDeg, kGripperNeutralDeg,
   0,
   0,
   0
@@ -208,14 +228,203 @@ IKEngine::Vec3 targetPosition{200.0f, 0.0f, 150.0f};  // Target XYZ in mm
 IKEngine::Vec3 targetOrientation{0.0f, 0.0f, 1.0f};   // Tool direction vector
 IKEngine::InverseKinematics ikSolver;
 static bool gripperOpen = false;
-static bool lastButton3State = false;
-static bool lastJoyBtnAState = false;
-static float gripperAngleOpen = 45.0f;
-static float gripperAngleClosed = 90.0f;
 static bool orientationAnglesValid = false;
 static float orientationPitchRad = 0.0f;
 static float orientationYawRad = 0.0f;
+static float manualPitchDeg = 90.0f;
+static float manualYawDeg = 90.0f;
+static float manualRollDeg = 90.0f;
 static float targetToolRollDeg = 90.0f;
+static GripperControlTarget gripperTarget = GripperControlTarget::Both;
+static bool honkCommandActive = false;
+static uint32_t lastControlLoopMs = 0;
+
+static constexpr ArmCameraView kCameraSequence[] = {
+    ArmCameraView::TopLeftCorner,
+    ArmCameraView::ThirdPerson,
+    ArmCameraView::OrbitHigh,
+    ArmCameraView::Overhead,
+    ArmCameraView::Side,
+    ArmCameraView::Front,
+    ArmCameraView::OperatorLeft,
+    ArmCameraView::OperatorRight,
+    ArmCameraView::ToolTip,
+    ArmCameraView::ShoulderClose,
+    ArmCameraView::RearQuarter
+};
+
+static void setDriveSpeedScalar(float value) {
+    driveSpeedScalar = constrain(value, kMinDriveScale, kMaxDriveScale);
+    thegillRuntime.driveSpeedScalar = driveSpeedScalar;
+}
+
+static void setArmSpeedScalar(float scalar) {
+    armSpeedScalar = constrain(scalar, kMinArmSpeedScalar, kMaxArmSpeedScalar);
+}
+
+static void setPumpDuty(uint8_t duty) {
+    duty = duty > kMaxPumpDuty ? kMaxPumpDuty : duty;
+    if (updateByte(thegillPeripheralCommand.pumpDuty, duty)) {
+        peripheralDirty = true;
+    }
+    thegillRuntime.pumpDuty = thegillPeripheralCommand.pumpDuty;
+}
+
+static void setLedLevel(uint8_t index, uint8_t value) {
+    if (index >= 3) {
+        return;
+    }
+    if (updateByte(thegillPeripheralCommand.ledPwm[index], value)) {
+        peripheralDirty = true;
+    }
+    thegillRuntime.ledPwm[index] = thegillPeripheralCommand.ledPwm[index];
+}
+
+static void resetPotTargetForMode() {
+    potTarget = (mechIaneMode == MechIaneMode::DriveMode) ? PotTarget::DriveSpeed : PotTarget::ArmSpeed;
+}
+
+static void disablePumpTarget(bool playSound) {
+    if (!pumpTargetActive) {
+        return;
+    }
+    pumpTargetActive = false;
+    setPumpDuty(0);
+    resetPotTargetForMode();
+    if (playSound) {
+        AudioRegistry::play("menu_back");
+    }
+}
+
+static void disableLedTarget(bool playSound) {
+    if (!ledTargetActive) {
+        return;
+    }
+    ledTargetActive = false;
+    setLedLevel(0, 0);
+    resetPotTargetForMode();
+    if (playSound) {
+        AudioRegistry::play("menu_back");
+    }
+}
+
+static void enablePumpTarget() {
+    pumpTargetActive = true;
+    ledTargetActive = false;
+    potTarget = PotTarget::Pump;
+    AudioRegistry::play("menu_select");
+}
+
+static void enableLedTarget() {
+    ledTargetActive = true;
+    pumpTargetActive = false;
+    potTarget = PotTarget::Led1;
+    AudioRegistry::play("menu_select");
+}
+
+static void applyPotValue(float potValue) {
+    const float clamped = constrain(potValue, 0.0f, 1.0f);
+    switch (potTarget) {
+        case PotTarget::DriveSpeed: {
+            float mapped = kMinDriveScale + (kMaxDriveScale - kMinDriveScale) * clamped;
+            setDriveSpeedScalar(mapped);
+            break;
+        }
+        case PotTarget::Pump: {
+            uint8_t duty = static_cast<uint8_t>(roundf(clamped * kMaxPumpDuty));
+            setPumpDuty(duty);
+            break;
+        }
+        case PotTarget::Led1: {
+            uint8_t pwm = static_cast<uint8_t>(roundf(clamped * 255.0f));
+            setLedLevel(0, pwm);
+            break;
+        }
+        case PotTarget::ArmSpeed: {
+            float mapped = kMinArmSpeedScalar + (kMaxArmSpeedScalar - kMinArmSpeedScalar) * clamped;
+            setArmSpeedScalar(mapped);
+            break;
+        }
+    }
+}
+
+static bool setFingerDegrees(uint8_t fingerIndex, float degrees) {
+    float clamped = constrain(degrees, kGripperOpenDeg, kGripperClosedDeg);
+    float* target = (fingerIndex == 0) ? &armCommand.gripper1Degrees : &armCommand.gripper2Degrees;
+    if (fabsf(*target - clamped) < 1e-3f) {
+        return false;
+    }
+    *target = clamped;
+    if (fingerIndex == 0) {
+        armCommand.validMask |= ArmCommandMask::Gripper1;
+    } else {
+        armCommand.validMask |= ArmCommandMask::Gripper2;
+    }
+    return true;
+}
+
+static void commandGrippers(float commandValue) {
+    float targetDeg = kGripperNeutralDeg;
+    if (commandValue > 0.1f) {
+        targetDeg = kGripperClosedDeg;
+    } else if (commandValue < -0.1f) {
+        targetDeg = kGripperOpenDeg;
+    }
+
+    bool changed = false;
+    changed |= setFingerDegrees(0, targetDeg);
+    changed |= setFingerDegrees(1, targetDeg);
+
+    if (changed) {
+        armCommand.flags |= ArmCommandFlag::EnableOutputs;
+        armCommandDirty = true;
+        gripperOpen = targetDeg <= (kGripperNeutralDeg - 1.0f);
+    }
+}
+
+static size_t cameraIndex(ArmCameraView view) {
+    for (size_t i = 0; i < sizeof(kCameraSequence) / sizeof(kCameraSequence[0]); ++i) {
+        if (kCameraSequence[i] == view) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+static void applyCameraStep(int delta) {
+    const size_t count = sizeof(kCameraSequence) / sizeof(kCameraSequence[0]);
+    size_t idx = cameraIndex(armCameraView);
+    int next = static_cast<int>(idx) + delta;
+    while (next < 0) next += static_cast<int>(count);
+    next %= static_cast<int>(count);
+    armCameraView = kCameraSequence[next];
+    thegillRuntime.cameraView = armCameraView;
+    AudioRegistry::play("menu_select");
+}
+
+void cycleControlMode() {
+    switch (mechIaneMode) {
+        case MechIaneMode::DriveMode:
+            mechIaneMode = MechIaneMode::ArmXYZ;
+            forceArmStateResync();
+            break;
+        case MechIaneMode::ArmXYZ:
+            mechIaneMode = MechIaneMode::ArmOrientation;
+            requestOrientationRetarget();
+            break;
+        case MechIaneMode::ArmOrientation:
+            mechIaneMode = MechIaneMode::DriveMode;
+            break;
+    }
+    AudioRegistry::play("menu_select");
+}
+
+void cycleArmCameraView(int delta) {
+    if (delta == 0) {
+        delta = 1;
+    }
+    applyCameraStep(delta);
+}
 
 // ============================================================================
 // TheGill Control Update (called at 50Hz)
@@ -224,10 +433,94 @@ static float targetToolRollDeg = 90.0f;
 void updateThegillControl() {
     const InputManager& inputs = InputManager::getInstance();
     const float potValue = inputs.getPotentiometer();
-    const float precisionScalar = precisionMode ? 0.45f : 1.0f;
-    const float adaptiveScalar =
-        (kMinDriveScale + (kMaxDriveScale - kMinDriveScale) * potValue) * precisionScalar;
     const uint32_t now = millis();
+
+    if (lastControlLoopMs == 0) {
+        lastControlLoopMs = now;
+    }
+    float dt = (now - lastControlLoopMs) * 0.001f;
+    lastControlLoopMs = now;
+    if (dt < 0.0f) {
+        dt = 0.0f;
+    }
+
+    const bool shiftDown = inputs.getButton2();
+    const bool leftDown = inputs.getButton1();
+    const bool rightDown = inputs.getButton3();
+    const bool leftPressed = inputs.getButton1Pressed();
+    const bool rightPressed = inputs.getButton3Pressed();
+    const bool shiftPressed = inputs.getButton2Pressed();
+    const bool inDriveMode = (mechIaneMode == MechIaneMode::DriveMode);
+
+    // Joystick button detection with beep feedback
+    const bool joyBtnAPressed = inputs.getJoystickButtonA_Pressed();
+    const bool joyBtnBPressed = inputs.getJoystickButtonB_Pressed();
+    const bool joyBtnAState = inputs.getJoystickButtonA();
+    const bool joyBtnBState = inputs.getJoystickButtonB();
+
+    // Debug: Print raw button states periodically
+    static uint32_t lastButtonDebugMs = 0;
+    if ((now - lastButtonDebugMs) > 2000) {
+        Serial.printf("[Thegill Debug] JoyBtn A: %s (GPIO19), JoyBtn B: %s (GPIO13)\n",
+                      joyBtnAState ? "PRESSED" : "released",
+                      joyBtnBState ? "PRESSED" : "released");
+        lastButtonDebugMs = now;
+    }
+
+    if (joyBtnAPressed) {
+        AudioRegistry::play("menu_select");
+        Serial.println("[Thegill] *** Joystick A button PRESSED EVENT ***");
+    }
+
+    if (joyBtnBPressed) {
+        AudioRegistry::play("menu_select");
+        Serial.println("[Thegill] *** Joystick B button PRESSED EVENT ***");
+    }
+
+    if (!inDriveMode) {
+        disablePumpTarget(false);
+        disableLedTarget(false);
+        potTarget = PotTarget::ArmSpeed;
+    } else if (!pumpTargetActive && !ledTargetActive) {
+        potTarget = PotTarget::DriveSpeed;
+    }
+
+    auto comboTriggered = [&](bool buttonPressed, bool buttonHeld) {
+        return (buttonPressed && shiftDown) || (shiftPressed && buttonHeld);
+    };
+
+    if (inDriveMode) {
+        if (comboTriggered(rightPressed, rightDown)) {
+            if (pumpTargetActive) {
+                disablePumpTarget(true);
+            } else {
+                disableLedTarget(false);
+                enablePumpTarget();
+            }
+        } else if (comboTriggered(leftPressed, leftDown)) {
+            if (ledTargetActive) {
+                disableLedTarget(true);
+            } else {
+                disablePumpTarget(false);
+                enableLedTarget();
+            }
+        }
+    } else if (shiftPressed && !leftDown && !rightDown) {
+        if (mechIaneMode == MechIaneMode::ArmXYZ) {
+            mechIaneMode = MechIaneMode::ArmOrientation;
+            requestOrientationRetarget();
+        } else {
+            mechIaneMode = MechIaneMode::ArmXYZ;
+        }
+        potTarget = PotTarget::ArmSpeed;
+        AudioRegistry::play("menu_select");
+    }
+
+    applyPotValue(potValue);
+
+    const float precisionScalar = precisionMode ? 0.45f : 1.0f;
+    const float adaptiveScalar = driveSpeedScalar * precisionScalar;
+    const float armControlScalar = armSpeedScalar * precisionScalar;
 
     if (previousMode == MechIaneMode::DriveMode && mechIaneMode != MechIaneMode::DriveMode) {
         forceArmStateResync();
@@ -256,7 +549,7 @@ void updateThegillControl() {
         return constrain(previous + delta, -1.0f, 1.0f);
     };
 
-    if (mechIaneMode == MechIaneMode::DriveMode) {
+    if (inDriveMode) {
         float left = shapeAxis(inputs.getJoystickA_Y());
         float right = shapeAxis(inputs.getJoystickB_Y());
 
@@ -288,7 +581,8 @@ void updateThegillControl() {
         armCommand.validMask = 0;
         armCommandDirty = false;
 
-        refreshPeripheralState(fmaxf(fabsf(left), fabsf(right)), potValue);
+        refreshPeripheralState(fmaxf(fabsf(left), fabsf(right)));
+        commandGrippers(0.0f);
     } else {
         thegillCommand.leftFront = 0;
         thegillCommand.leftRear = 0;
@@ -300,53 +594,102 @@ void updateThegillControl() {
         const float joyBY = shapeAxis(inputs.getJoystickB_Y());
 
         if (mechIaneMode == MechIaneMode::ArmXYZ) {
-            const float positionSpeed = 9.0f * adaptiveScalar;
-            targetPosition.x = constrain(targetPosition.x + joyAX * positionSpeed, 50.0f, 450.0f);
-            targetPosition.y = constrain(targetPosition.y + joyAY * positionSpeed, -300.0f, 300.0f);
-            targetPosition.z = constrain(targetPosition.z + joyBY * positionSpeed, 0.0f, 420.0f);
+            const float positionSpeed = 9.0f * armControlScalar;
+            targetPosition.x = constrain(targetPosition.x + joyAX * positionSpeed, 0.0f, 600.0f);
+            targetPosition.y = constrain(targetPosition.y + joyAY * positionSpeed, -400.0f, 400.0f);
+            targetPosition.z = constrain(targetPosition.z + joyBY * positionSpeed, 0.0f, 600.0f);
         } else {
             if (!orientationAnglesValid) {
-                float length = sqrtf(targetOrientation.x * targetOrientation.x +
-                                     targetOrientation.y * targetOrientation.y +
-                                     targetOrientation.z * targetOrientation.z);
-                if (length < 0.001f) {
-                    targetOrientation = {0.0f, 0.0f, 1.0f};
-                    length = 1.0f;
-                }
-                orientationPitchRad = asinf(targetOrientation.z / length);
-                orientationYawRad = atan2f(targetOrientation.y, targetOrientation.x);
+                manualPitchDeg = constrain(armCommand.pitchDegrees, 0.0f, 180.0f);
+                manualYawDeg = constrain(armCommand.yawDegrees, 0.0f, 180.0f);
+                manualRollDeg = constrain(armCommand.rollDegrees, 0.0f, 180.0f);
+                targetToolRollDeg = manualRollDeg;
+                orientationPitchRad = (manualPitchDeg - 90.0f) * DEG_TO_RAD;
+                orientationYawRad = (manualYawDeg - 90.0f) * DEG_TO_RAD;
                 orientationAnglesValid = true;
             }
 
-            const float orientSpeed = 0.08f * adaptiveScalar;
-            const float rollSpeedDeg = 12.0f * (0.5f + potValue) * precisionScalar;
+            const float orientSpeedDeg = 0.08f * RAD_TO_DEG * armControlScalar;
+            const float rollSpeedDeg = 12.0f * armControlScalar;
 
-            orientationPitchRad = constrain(orientationPitchRad + joyAY * orientSpeed,
-                                            -PI / 2.0f + 0.1f,
-                                            PI / 2.0f - 0.1f);
-            orientationYawRad += joyAX * orientSpeed;
-            targetToolRollDeg = constrain(targetToolRollDeg + joyBY * rollSpeedDeg, 0.0f, 180.0f);
+            const float prevPitch = manualPitchDeg;
+            const float prevYaw = manualYawDeg;
 
+            manualPitchDeg = constrain(manualPitchDeg + joyAY * orientSpeedDeg, 5.0f, 175.0f);
+            manualYawDeg = constrain(manualYawDeg + joyAX * orientSpeedDeg, 0.0f, 180.0f);
+            manualRollDeg = constrain(manualRollDeg + joyBY * rollSpeedDeg, 0.0f, 180.0f);
+            targetToolRollDeg = manualRollDeg;
+
+            if (fabsf(manualPitchDeg - prevPitch) > 0.05f || fabsf(manualYawDeg - prevYaw) > 0.05f) {
+                Serial.printf("[Thegill Orientation] Pitch: %.2f deg, Yaw: %.2f deg, Roll: %.2f deg (joyAX: %.2f, joyAY: %.2f)\n",
+                              manualPitchDeg, manualYawDeg, manualRollDeg, joyAX, joyAY);
+            }
+
+            orientationPitchRad = (manualPitchDeg - 90.0f) * DEG_TO_RAD;
+            orientationYawRad = (manualYawDeg - 90.0f) * DEG_TO_RAD;
             targetOrientation.x = cosf(orientationPitchRad) * cosf(orientationYawRad);
             targetOrientation.y = cosf(orientationPitchRad) * sinf(orientationYawRad);
             targetOrientation.z = sinf(orientationPitchRad);
         }
 
+        float gripperCommandValue = 0.0f;
+        bool gripperOverride = false;
+        if (joyBtnAState && !joyBtnBState) {
+            gripperCommandValue = 1.0f;
+            gripperOverride = true;
+        } else if (joyBtnBState && !joyBtnAState) {
+            gripperCommandValue = -1.0f;
+            gripperOverride = true;
+        }
+        if (!gripperOverride && !shiftDown && (leftDown ^ rightDown)) {
+            gripperCommandValue = leftDown ? -1.0f : 1.0f;
+            gripperOverride = true;
+        }
+        if (!gripperOverride) {
+            gripperCommandValue = 0.0f;
+        }
+        commandGrippers(gripperCommandValue);
+
         IKEngine::IKSolution solution;
-        if (ikSolver.solve(targetPosition, targetOrientation, solution)) {
-            armCommand.extensionMillimeters = constrain(solution.joints.elbowExtensionMm, 0.0f, 250.0f);
+        if (ikSolver.solve(targetPosition, solution)) {
+            armCommand.extensionMillimeters = constrain(solution.joints.elbowExtensionMm, 0.0f, 130.0f);
+            armCommand.baseDegrees = solution.joints.baseYawDeg;
             armCommand.shoulderDegrees = solution.joints.shoulderDeg;
-            armCommand.elbowDegrees = solution.joints.elbowDeg;
+            armCommand.elbowDegrees = solution.joints.elbowDeg + 90.0f;
             armCommand.pitchDegrees = solution.joints.gripperPitchDeg;
             armCommand.rollDegrees = targetToolRollDeg;
             armCommand.yawDegrees = solution.joints.gripperYawDeg;
-            armCommand.validMask = ArmCommandMask::AllServos | ArmCommandMask::Extension;
+            armCommand.validMask = ArmCommandMask::AllServos |
+                                   ArmCommandMask::Extension |
+                                   ArmCommandMask::Base |
+                                   ArmCommandMask::AllGrippers;
             armCommand.flags = ArmCommandFlag::EnableOutputs;
             armCommandDirty = true;
+
+            if (mechIaneMode == MechIaneMode::ArmOrientation) {
+                armCommand.pitchDegrees = manualPitchDeg;
+                armCommand.rollDegrees = manualRollDeg;
+                armCommand.yawDegrees = manualYawDeg;
+            }
+
+            // Debug: Log arm command when in orientation mode
+            static uint32_t lastDebugPrintMs = 0;
+            if (mechIaneMode == MechIaneMode::ArmOrientation && (now - lastDebugPrintMs) > 500) {
+                Serial.printf("[Thegill ArmCmd] Pitch: %.1f°, Yaw: %.1f°, Roll: %.1f° | Shoulder: %.1f°, Elbow: %.1f°\n",
+                              armCommand.pitchDegrees, armCommand.yawDegrees, armCommand.rollDegrees,
+                              armCommand.shoulderDegrees, armCommand.elbowDegrees);
+                lastDebugPrintMs = now;
+            }
+
+            manualPitchDeg = armCommand.pitchDegrees;
+            manualYawDeg = armCommand.yawDegrees;
+            manualRollDeg = armCommand.rollDegrees;
         }
 
-        refreshPeripheralState(0.0f, potValue);
+        refreshPeripheralState(0.0f);
     }
+
+    honkCommandActive = inDriveMode && shiftDown && !leftDown && !rightDown;
 
     if (requestStatusPulse) {
         latchSystemCommand(GillSystemCommand_RequestStatus);
@@ -358,13 +701,27 @@ void updateThegillControl() {
         lastArmStateRequestMs = now;
     }
 
+    uint8_t commandFlags = 0;
+    if (brakeLatch) {
+        commandFlags |= GillCommandFlag_Brake;
+    }
+    if (honkCommandActive) {
+        commandFlags |= GillCommandFlag_Honk;
+    }
+    thegillCommand.flags = commandFlags;
+
     thegillCommand.magic = THEGILL_PACKET_MAGIC;
     thegillCommand.system = systemCommandLatch;
     systemCommandLatch = 0;
 
-    thegillRuntime.brakeActive = (thegillCommand.flags & GillCommandFlag_Brake) != 0;
-    thegillRuntime.honkActive = (thegillCommand.flags & GillCommandFlag_Honk) != 0;
+    thegillRuntime.brakeActive = (commandFlags & GillCommandFlag_Brake) != 0;
+    thegillRuntime.honkActive = honkCommandActive;
+    thegillRuntime.gripperTarget = gripperTarget;
+    thegillRuntime.driveSpeedScalar = driveSpeedScalar;
+    thegillRuntime.easingRate = thegillConfig.easingRate;
+    thegillRuntime.cameraView = armCameraView;
 }
+
 
 // ============================================================================
 // TheGill Module Class (ILITE Framework Integration)
@@ -661,6 +1018,20 @@ void drawCylinder(DisplayCanvas& canvas, Point2D p1, Point2D p2, int16_t radius 
     canvas.drawCircle(p2.x, p2.y, radius, false);
 }
 
+static IKEngine::Vec3 crossVec(const IKEngine::Vec3& a, const IKEngine::Vec3& b) {
+    return {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+static void drawExtensionSegment(DisplayCanvas& canvas, Point2D start, Point2D end) {
+    canvas.drawLine(start.x, start.y, end.x, end.y);
+    canvas.drawLine(start.x + 1, start.y, end.x + 1, end.y);
+    canvas.drawLine(start.x - 1, start.y, end.x - 1, end.y);
+}
+
 void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& solution) {
     // Draw 3D isometric view of the arm based on IK solution
     canvas.setDrawColor(1);
@@ -692,20 +1063,32 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
     float elbowRad = solution.joints.elbowDeg * DEG_TO_RAD;
 
     // Shoulder joint position (rotates around base)
-    float shoulderLen = 158.0f;  // From IK config
+    float shoulderLen = 155.0f;  // From IK config
     float shoulderX = shoulderLen * cosf(shoulderRad) * cosf(baseYawRad);
     float shoulderY = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
     float shoulderZ = shoulderLen * sinf(shoulderRad);
 
     // Elbow joint position
-    float forearmLen = 182.0f + solution.joints.elbowExtensionMm;
+    float forearmLen = 170.0f + solution.joints.elbowExtensionMm;
     float elbowAngleAbs = shoulderRad + elbowRad - PI;  // Absolute elbow angle
-    float elbowX = shoulderX + forearmLen * cosf(elbowAngleAbs) * cosf(baseYawRad);
-    float elbowY = shoulderY + forearmLen * cosf(elbowAngleAbs) * sinf(baseYawRad);
-    float elbowZ = shoulderZ + forearmLen * sinf(elbowAngleAbs);
+    float forearmDirX = cosf(elbowAngleAbs) * cosf(baseYawRad);
+    float forearmDirY = cosf(elbowAngleAbs) * sinf(baseYawRad);
+    float forearmDirZ = sinf(elbowAngleAbs);
+    float extensionLen = fmaxf(solution.joints.elbowExtensionMm, 0.0f);
+    float rigidLen = forearmLen - extensionLen;
+    if (rigidLen < 0.0f) {
+        extensionLen += rigidLen;
+        rigidLen = 0.0f;
+    }
+    float extensionBaseX = shoulderX + rigidLen * forearmDirX;
+    float extensionBaseY = shoulderY + rigidLen * forearmDirY;
+    float extensionBaseZ = shoulderZ + rigidLen * forearmDirZ;
+    float elbowX = extensionBaseX + extensionLen * forearmDirX;
+    float elbowY = extensionBaseY + extensionLen * forearmDirY;
+    float elbowZ = extensionBaseZ + extensionLen * forearmDirZ;
 
     // End effector (wrist center)
-    float wristLen = 112.0f;  // Total wrist chain length
+    float wristLen = 0.0f;  // Reference at extension tip
     float wristX = elbowX + solution.toolDirection.x * wristLen;
     float wristY = elbowY + solution.toolDirection.y * wristLen;
     float wristZ = elbowZ + solution.toolDirection.z * wristLen;
@@ -718,8 +1101,10 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
     Point2D pTarget = projectIsometric(targetPosition.x, targetPosition.y, targetPosition.z);
 
     // Draw arm links as cylinders for 3D effect
+    Point2D pExtensionBase = projectIsometric(extensionBaseX, extensionBaseY, extensionBaseZ);
     drawCylinder(canvas, pBase, pShoulder, 2);      // Upper arm
-    drawCylinder(canvas, pShoulder, pElbow, 2);     // Forearm
+    drawCylinder(canvas, pShoulder, pExtensionBase, 2);
+    drawExtensionSegment(canvas, pExtensionBase, pElbow);                   // Telescoping section
     drawCylinder(canvas, pElbow, pWrist, 1);        // Wrist (thinner)
 
     // Draw joints as filled circles
@@ -742,6 +1127,44 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
     canvas.drawLine(pTarget.x - 4, pTarget.y, pTarget.x + 4, pTarget.y);
     canvas.drawLine(pTarget.x, pTarget.y - 4, pTarget.x, pTarget.y + 4);
     canvas.drawCircle(pTarget.x, pTarget.y, 5, false);
+
+    IKEngine::Vec3 wristVec{wristX, wristY, wristZ};
+    IKEngine::Vec3 forward = IKEngine::InverseKinematics::normalise(solution.toolDirection);
+    IKEngine::Vec3 worldUp{0.0f, 0.0f, 1.0f};
+    IKEngine::Vec3 right = crossVec(forward, worldUp);
+    float rightNorm = sqrtf(right.x * right.x + right.y * right.y + right.z * right.z);
+    if (rightNorm < 1e-3f) {
+        right = {1.0f, 0.0f, 0.0f};
+    }
+    right = IKEngine::InverseKinematics::normalise(right);
+    IKEngine::Vec3 up = IKEngine::InverseKinematics::normalise(crossVec(right, forward));
+    const float rollRad = solution.joints.gripperRollDeg * DEG_TO_RAD;
+    if (fabsf(rollRad) > 1e-3f) {
+        const float c = cosf(rollRad);
+        const float s = sinf(rollRad);
+        IKEngine::Vec3 rotatedRight{
+            right.x * c + up.x * s,
+            right.y * c + up.y * s,
+            right.z * c + up.z * s
+        };
+        IKEngine::Vec3 rotatedUp{
+            up.x * c - right.x * s,
+            up.y * c - right.y * s,
+            up.z * c - right.z * s
+        };
+        right = rotatedRight;
+        up = rotatedUp;
+    }
+    const float axisLen = 60.0f;
+    auto drawAxis = [&](const IKEngine::Vec3& dir) {
+        Point2D tip = projectIsometric(wristVec.x + dir.x * axisLen,
+                                       wristVec.y + dir.y * axisLen,
+                                       wristVec.z + dir.z * axisLen);
+        canvas.drawLine(pWrist.x, pWrist.y, tip.x, tip.y);
+    };
+    drawAxis(forward);
+    drawAxis(up);
+    drawAxis(right);
 
     // Draw mode and gripper state indicators
     canvas.setFont(DisplayCanvas::TINY);
@@ -780,11 +1203,7 @@ float getTargetToolRoll() {
 }
 
 void setUnifiedGripper(bool open) {
-    gripperOpen = open;
-    const float targetDeg = open ? gripperAngleOpen : gripperAngleClosed;
-    armCommand.gripper1Degrees = targetDeg;
-    armCommand.gripper2Degrees = targetDeg;
-    armCommand.validMask |= ArmCommandMask::AllGrippers;
+    commandGrippers(open ? -1.0f : 1.0f);
 }
 
 void toggleUnifiedGripper() {
@@ -796,24 +1215,25 @@ bool isGripperOpen() {
 }
 
 void setGripperFingerPosition(uint8_t fingerIndex, float degrees) {
-    const float clamped = constrain(degrees, 0.0f, 180.0f);
-    if (fingerIndex == 0) {
-        armCommand.gripper1Degrees = clamped;
-        armCommand.validMask |= ArmCommandMask::Gripper1;
-    } else {
-        armCommand.gripper2Degrees = clamped;
-        armCommand.validMask |= ArmCommandMask::Gripper2;
+    if (fingerIndex > 1) {
+        return;
+    }
+    if (setFingerDegrees(fingerIndex, degrees)) {
+        armCommand.flags |= ArmCommandFlag::EnableOutputs;
+        armCommandDirty = true;
+        const float average = 0.5f * (armCommand.gripper1Degrees + armCommand.gripper2Degrees);
+        gripperOpen = average <= (kGripperNeutralDeg - 1.0f);
     }
 }
 
 static IKEngine::Vec3 estimateToolPosition(const ArmStatePacket& packet) {
-    constexpr float shoulderLen = 158.0f;
-    constexpr float elbowBaseLen = 182.0f;
-    constexpr float wristLen = 112.0f;
+    constexpr float shoulderLen = 155.0f;
+    constexpr float elbowBaseLen = 170.0f;
+    constexpr float wristLen = 0.0f;
 
     const float baseYawRad = packet.baseDegrees * DEG_TO_RAD;
     const float shoulderRad = packet.servoDegrees[0] * DEG_TO_RAD;
-    const float elbowRad = packet.servoDegrees[1] * DEG_TO_RAD;
+    const float elbowRad = (packet.servoDegrees[1] - 90.0f) * DEG_TO_RAD;
     const float extensionMm = packet.extensionCentimeters * 10.0f;
     const float forearmLen = elbowBaseLen + extensionMm;
     const float elbowAngleAbs = shoulderRad + elbowRad - PI;
@@ -873,9 +1293,6 @@ bool acquireArmCommand(ArmControlCommand& out) {
     if (mechIaneMode == MechIaneMode::DriveMode) {
         return false;
     }
-    if (!armStateSynced) {
-        return false;
-    }
     const uint32_t now = millis();
     if (!armCommandDirty && (now - lastArmCommandSendMs) < kArmCommandMinIntervalMs) {
         return false;
@@ -914,6 +1331,10 @@ void processStatusPacket(const StatusPacket& packet) {
     thegillRuntime.failsafeEnabled = (packet.flags & StatusFlag::FailsafeArmed) != 0;
     thegillRuntime.telemetryEnabled = (packet.flags & StatusFlag::TelemetryOn) != 0;
     thegillRuntime.driveEnabled = (packet.flags & StatusFlag::DriveArmed) != 0;
+    thegillRuntime.driveSpeedScalar = driveSpeedScalar;
+    thegillRuntime.easingRate = thegillConfig.easingRate;
+    thegillRuntime.gripperTarget = gripperTarget;
+    thegillRuntime.cameraView = armCameraView;
 }
 
 void processArmStatePacket(const ArmStatePacket& packet) {
@@ -940,12 +1361,21 @@ void processArmStatePacket(const ArmStatePacket& packet) {
     targetToolRollDeg = packet.servoDegrees[3];
 
     armCommand.extensionMillimeters = packet.extensionCentimeters * 10.0f;
+    armCommand.baseDegrees = packet.baseDegrees;
     armCommand.shoulderDegrees = packet.servoDegrees[0];
     armCommand.elbowDegrees = packet.servoDegrees[1];
     armCommand.pitchDegrees = packet.servoDegrees[2];
     armCommand.rollDegrees = packet.servoDegrees[3];
     armCommand.yawDegrees = packet.servoDegrees[4];
-    armCommand.validMask = ArmCommandMask::AllServos | ArmCommandMask::Extension;
+    manualPitchDeg = armCommand.pitchDegrees;
+    manualYawDeg = armCommand.yawDegrees;
+    manualRollDeg = armCommand.rollDegrees;
+    armCommand.gripper1Degrees = kGripperNeutralDeg;
+    armCommand.gripper2Degrees = kGripperNeutralDeg;
+    armCommand.validMask = ArmCommandMask::AllServos |
+                           ArmCommandMask::Extension |
+                           ArmCommandMask::Base |
+                           ArmCommandMask::AllGrippers;
     armCommand.flags = (packet.flags & 0x01) ? ArmCommandFlag::EnableOutputs : 0;
     armCommandDirty = false;
     peripheralDirty = true;
@@ -991,6 +1421,11 @@ void onThegillUnpaired() {
     requestArmStatePending = false;
     armCommand.validMask = 0;
     thegillRuntime = {};
+    thegillRuntime.driveSpeedScalar = driveSpeedScalar;
+    thegillRuntime.easingRate = thegillConfig.easingRate;
+    thegillRuntime.gripperTarget = gripperTarget;
+    thegillRuntime.cameraView = armCameraView;
+    thegillRuntime.pumpDuty = thegillPeripheralCommand.pumpDuty;
     peripheralDirty = true;
 }
 

@@ -235,6 +235,16 @@ public:
     void setActiveModule(ILITEModule* module);
 
     /**
+     * @brief Request a module switch from any task context.
+     *
+     * The change is deferred to the main framework loop to avoid race
+     * conditions with the control task.
+     *
+     * @param module Module to activate (nullptr to clear selection)
+     */
+    void requestModuleActivation(ILITEModule* module);
+
+    /**
      * @brief Get the currently active module
      * @return Pointer to active module, or nullptr if none active
      */
@@ -464,6 +474,10 @@ private:
 
     /// Previous active module (for deactivation)
     ILITEModule* previousModule_;
+
+    /// Pending module request (processed on update loop)
+    ILITEModule* pendingModule_;
+    bool moduleChangePending_;
 
     /// Pairing state
     bool paired_;

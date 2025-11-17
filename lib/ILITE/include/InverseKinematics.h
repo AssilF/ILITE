@@ -69,11 +69,11 @@ struct ExtensionLimits {
  * Physical layout of the arm links and wrist offsets (millimetres).
  */
 struct ArmDimensions {
-    float shoulderLengthMm = 158.0f; ///< Shoulder pivot to elbow base.
-    float elbowLengthMm = 182.0f;    ///< Elbow base length without extension.
-    float yawToPitchOffsetMm = 32.0f;
-    float pitchToRollOffsetMm = 30.0f;
-    float rollToEffectorOffsetMm = 50.0f;
+    float shoulderLengthMm = 155.0f; ///< Shoulder pivot to elbow base.
+    float elbowLengthMm = 170.0f;    ///< Elbow base length without extension.
+    float yawToPitchOffsetMm = 0.0f;
+    float pitchToRollOffsetMm = 0.0f;
+    float rollToEffectorOffsetMm = 0.0f;
 
     /**
      * @return Total wrist chain length from the yaw joint to the tool tip.
@@ -88,8 +88,8 @@ struct ArmDimensions {
  */
 struct IKConfiguration {
     ArmDimensions dimensions{};
-    ExtensionLimits elbowExtension{0.0f, 110.0f};
-    JointLimits baseYaw{-180.0f, 180.0f};
+    ExtensionLimits elbowExtension{0.0f, 130.0f};
+    JointLimits baseYaw{0.0f, 360.0f};
     JointLimits shoulder{0.0f, 180.0f};
     JointLimits elbow{0.0f, 180.0f};
     JointLimits gripperYaw{0.0f, 180.0f};

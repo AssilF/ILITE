@@ -54,6 +54,8 @@ ILITEFramework::ILITEFramework()
       bootTime_(0),
       activeModule_(nullptr),
       previousModule_(nullptr),
+      pendingModule_(nullptr),
+      moduleChangePending_(false),
       paired_(false),
       lastTelemetryTime_(0),
       packetTxCount_(0),
@@ -452,6 +454,18 @@ void ILITEFramework::update() {
         return;
     }
 
+    // Update input manager for button edge detection
+    InputManager::getInstance().update();
+
+    if (moduleChangePending_) {
+        ILITEModule* requested = pendingModule_;
+        pendingModule_ = nullptr;
+        moduleChangePending_ = false;
+        if (requested != activeModule_) {
+            setActiveModule(requested);
+        }
+    }
+
     // Handle OTA updates
     if (config_.enableOTA) {
         handleOTA();
@@ -527,14 +541,7 @@ void ILITEFramework::handlePairing() {
 }
 
 void ILITEFramework::handleConnectionTimeout() {
-    if (lastTelemetryTime_ > 0) {
-        uint32_t timeSinceLastPacket = millis() - lastTelemetryTime_;
-
-        if (timeSinceLastPacket > config_.connectionTimeoutMs) {
-            Logger::getInstance().logf("Connection timeout (%lu ms)", timeSinceLastPacket);
-            unpair();
-        }
-    }
+    // Automatic disconnects are disabled; users can unpair via the devices menu.
 }
 
 void ILITEFramework::onTelemetryReceived(ILITEModule* module) {
@@ -575,6 +582,11 @@ void ILITEFramework::setActiveModule(ILITEModule* module) {
             module->onPair();
         }
     }
+}
+
+void ILITEFramework::requestModuleActivation(ILITEModule* module) {
+    pendingModule_ = module;
+    moduleChangePending_ = true;
 }
 
 ILITEModule* ILITEFramework::getActiveModule() const {

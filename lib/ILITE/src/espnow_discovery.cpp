@@ -151,13 +151,16 @@ void EspNowDiscovery::discover() {
         lastBroadcastMs = now;
     }
 
-    // Auto-pair with first discovered device
-    bool autoPairEnabled = discoveryEnabled;
-    if (autoPairEnabled && !link.paired) {
+    // Auto-pair with first discovered device (when allowed)
+    bool autoPairAllowed = discoveryEnabled && autoPairingEnabled;
+    if (autoPairAllowed && !link.paired) {
         int targetIndex = selectTarget();
         if (targetIndex >= 0) {
             PeerEntry& target = peers[targetIndex];
-            bool shouldConfirm = !target.confirmed || now - link.lastConfirmSentMs >= BROADCAST_INTERVAL_MS;
+            const bool awaitingSamePeer = link.awaitingAck && macEqual(target.mac, link.peerMac);
+            const bool shouldRetryCurrent = awaitingSamePeer && !target.acked &&
+                                            (now - link.lastConfirmSentMs) >= BROADCAST_INTERVAL_MS;
+            bool shouldConfirm = !target.confirmed || shouldRetryCurrent;
             if (shouldConfirm) {
                 Serial.printf("[ESP-NOW] Auto-pairing with device index %d\n", targetIndex);
                 beginPairingWith(target.mac);
@@ -170,11 +173,6 @@ void EspNowDiscovery::discover() {
             link.lastKeepaliveMs = now;
         }
 
-        if (now - link.lastActivityMs > LINK_TIMEOUT_MS) {
-            Serial.println("[ESP-NOW] Link timeout, resetting");
-            resetLink();
-            connectionLogAdd("Link timeout, resetting");
-        }
     }
 #else
     if (link.paired) {
@@ -182,12 +180,6 @@ void EspNowDiscovery::discover() {
         if (now - link.lastKeepaliveMs >= KEEPALIVE_INTERVAL_MS) {
             sendPacket(MessageType::MSG_KEEPALIVE, link.peerMac);
             link.lastKeepaliveMs = now;
-        }
-
-        if (now - link.lastActivityMs > LINK_TIMEOUT_MS) {
-            Serial.println("[ESP-NOW] Controller timeout, resetting link");
-            resetLink();
-            connectionLogAdd("Controller timeout, resetting link");
         }
     }
 #endif
@@ -624,6 +616,10 @@ const Identity* EspNowDiscovery::getPairedIdentity() const {
     return &entry.identity;
 }
 
+uint32_t EspNowDiscovery::getLastActivityMs() const {
+    return link.lastActivityMs;
+}
+
 void EspNowDiscovery::setDiscoveryEnabled(bool enabled) {
     discoveryEnabled = enabled;
     if (enabled && !link.paired) {
@@ -642,6 +638,14 @@ void EspNowDiscovery::setContinuousScanning(bool enabled) {
 
 bool EspNowDiscovery::isContinuousScanning() const {
     return continuousScanning;
+}
+
+void EspNowDiscovery::setAutoPairEnabled(bool enabled) {
+    autoPairingEnabled = enabled;
+}
+
+bool EspNowDiscovery::isAutoPairEnabled() const {
+    return autoPairingEnabled;
 }
 
 void EspNowDiscovery::setCommandCallback(void (*callback)(const char* message)) {

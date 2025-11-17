@@ -89,10 +89,13 @@ public:
     int getPairedPeerIndex() const;
     const uint8_t* getPairedMac() const;
     const Identity* getPairedIdentity() const;
+    uint32_t getLastActivityMs() const;
     void setDiscoveryEnabled(bool enabled);
     bool isDiscoveryEnabled() const;
     void setContinuousScanning(bool enabled);
     bool isContinuousScanning() const;
+    void setAutoPairEnabled(bool enabled);
+    bool isAutoPairEnabled() const;
     bool beginPairingWith(const uint8_t* mac);
     void setCommandCallback(void (*callback)(const char* message));
 
@@ -139,6 +142,7 @@ private:
     uint32_t lastBroadcastMs = 0;
     bool discoveryEnabled = true;
     bool continuousScanning = false;  // Keep scanning even when paired
+    bool autoPairingEnabled = true;
     void (*commandCallback)(const char* message) = nullptr;
 };
 

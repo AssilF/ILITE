@@ -145,7 +145,7 @@ void setup() {
     // Register custom control bindings (after framework init)
     // Example: Play sound on button 3 press
     ControlBinding binding1;
-    binding1.input = INPUT_BUTTON2;
+    binding1.input = INPUT_JOYSTICK_A_BUTTON;
     binding1.event = EVENT_CLICK;
     binding1.action = []() {
         AudioRegistry::play("startup");
@@ -158,8 +158,8 @@ void setup() {
 
     // Example: Emergency stop on long press (2+ seconds) of button 1
     ControlBinding binding2;
-    binding2.input = INPUT_BUTTON2;
-    binding2.event = EVENT_LONG_PRESS;
+    binding2.input = INPUT_JOYSTICK_B_BUTTON;
+    binding2.event = EVENT_CLICK;
     binding2.action = []() {
         AudioRegistry::play("error");
         Serial.println("[EMERGENCY STOP] Button 1 held for 2+ seconds");
