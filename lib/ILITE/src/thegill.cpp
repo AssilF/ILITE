@@ -655,7 +655,7 @@ void updateThegillControl() {
             armCommand.extensionMillimeters = constrain(solution.joints.elbowExtensionMm, 0.0f, 130.0f);
             armCommand.baseDegrees = solution.joints.baseYawDeg;
             armCommand.shoulderDegrees = solution.joints.shoulderDeg;
-            armCommand.elbowDegrees = solution.joints.elbowDeg + 90.0f;
+            armCommand.elbowDegrees = solution.joints.elbowDeg;
             armCommand.pitchDegrees = solution.joints.gripperPitchDeg;
             armCommand.rollDegrees = targetToolRollDeg;
             armCommand.yawDegrees = solution.joints.gripperYawDeg;
@@ -1233,7 +1233,7 @@ static IKEngine::Vec3 estimateToolPosition(const ArmStatePacket& packet) {
 
     const float baseYawRad = packet.baseDegrees * DEG_TO_RAD;
     const float shoulderRad = packet.servoDegrees[0] * DEG_TO_RAD;
-    const float elbowRad = (packet.servoDegrees[1] - 90.0f) * DEG_TO_RAD;
+    const float elbowRad = packet.servoDegrees[1] * DEG_TO_RAD;
     const float extensionMm = packet.extensionCentimeters * 10.0f;
     const float forearmLen = elbowBaseLen + extensionMm;
     const float elbowAngleAbs = shoulderRad + elbowRad - PI;
