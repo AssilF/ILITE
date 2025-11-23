@@ -12,9 +12,9 @@
 namespace {
 
 constexpr int16_t kMaxWheelCommand = 1000;
-constexpr float kMinDriveScale = 0.35f;
+constexpr float kMinDriveScale = 0.10f;
 constexpr float kMaxDriveScale = 1.0f;
-constexpr float kMinArmSpeedScalar = 0.2f;
+constexpr float kMinArmSpeedScalar = 0.02f;
 constexpr float kMaxArmSpeedScalar = 1.0f;
 constexpr uint8_t kMaxPumpDuty = 200;
 constexpr uint32_t kPeripheralIntervalMs = 120;
@@ -123,6 +123,7 @@ static bool requestArmStatePending = false;
 static bool armStateSynced = false;
 static bool peripheralDirty = true;
 static bool configDirty = true;
+static bool extensionEnabled = true;
 static uint32_t lastPeripheralSendMs = 0;
 static uint32_t lastConfigSendMs = 0;
 static uint32_t lastArmStateRequestMs = 0;
@@ -224,7 +225,7 @@ MechIaneMode mechIaneMode = MechIaneMode::DriveMode;
 ArmCameraView armCameraView = ArmCameraView::TopLeftCorner;
 
 // Mech'Iane control state variables (non-static for external access)
-IKEngine::Vec3 targetPosition{200.0f, 0.0f, 150.0f};  // Target XYZ in mm
+IKEngine::Vec3 targetPosition{200.0f, 0.0f, 0.0f};    // Planar XY target in mm
 IKEngine::Vec3 targetOrientation{0.0f, 0.0f, 1.0f};   // Tool direction vector
 IKEngine::InverseKinematics ikSolver;
 static bool gripperOpen = false;
@@ -235,6 +236,8 @@ static float manualPitchDeg = 90.0f;
 static float manualYawDeg = 90.0f;
 static float manualRollDeg = 90.0f;
 static float targetToolRollDeg = 90.0f;
+static float manualBaseYawDeg = 0.0f;
+static float manualExtensionMm = 0.0f;
 static GripperControlTarget gripperTarget = GripperControlTarget::Both;
 static bool honkCommandActive = false;
 static uint32_t lastControlLoopMs = 0;
@@ -260,6 +263,27 @@ static void setDriveSpeedScalar(float value) {
 
 static void setArmSpeedScalar(float scalar) {
     armSpeedScalar = constrain(scalar, kMinArmSpeedScalar, kMaxArmSpeedScalar);
+}
+
+static IKEngine::Vec3 planarToWorld(float planarX, float planarY, float yawDeg) {
+    const float yawRad = yawDeg * DEG_TO_RAD;
+    const float cosYaw = cosf(yawRad);
+    const float sinYaw = sinf(yawRad);
+    return {
+        planarX * cosYaw,
+        planarY,
+        planarX * sinYaw
+    };
+}
+
+static void setPlanarTargetFromWorld(const IKEngine::Vec3& world, float yawDeg) {
+    const float yawRad = yawDeg * DEG_TO_RAD;
+    const float cosYaw = cosf(yawRad);
+    const float sinYaw = sinf(yawRad);
+    const float horizontal = world.x * cosYaw + world.z * sinYaw;
+    targetPosition.x = constrain(horizontal, 0.0f, 780.0f);
+    targetPosition.y = constrain(world.y, -780.0f, 780.0f);
+    targetPosition.z = 0.0f;
 }
 
 static void setPumpDuty(uint8_t duty) {
@@ -361,6 +385,24 @@ static bool setFingerDegrees(uint8_t fingerIndex, float degrees) {
         armCommand.validMask |= ArmCommandMask::Gripper2;
     }
     return true;
+}
+
+void setExtensionEnabled(bool enabled) {
+    if (extensionEnabled == enabled) {
+        return;
+    }
+    extensionEnabled = enabled;
+    ikSolver.setExtensionEnabled(extensionEnabled);
+    if (!extensionEnabled) {
+        manualExtensionMm = 0.0f;
+        armCommand.extensionMillimeters = 0.0f;
+        armCommand.validMask |= ArmCommandMask::Extension;
+        armCommandDirty = true;
+    }
+}
+
+bool isExtensionEnabled() {
+    return extensionEnabled;
 }
 
 static void commandGrippers(float commandValue) {
@@ -591,13 +633,25 @@ void updateThegillControl() {
 
         const float joyAX = shapeAxis(inputs.getJoystickA_X());
         const float joyAY = shapeAxis(inputs.getJoystickA_Y());
+        const float joyBX = shapeAxis(inputs.getJoystickB_X());
         const float joyBY = shapeAxis(inputs.getJoystickB_Y());
+
+        const auto& ikConfig = ikSolver.getConfiguration();
+        const float baseMin = fminf(ikConfig.baseYaw.minDeg, ikConfig.baseYaw.maxDeg);
+        const float baseMax = fmaxf(ikConfig.baseYaw.minDeg, ikConfig.baseYaw.maxDeg);
+        const float baseYawSpeed = 6.0f * armControlScalar;
+        manualBaseYawDeg = constrain(manualBaseYawDeg + joyBX * baseYawSpeed, baseMin, baseMax);
 
         if (mechIaneMode == MechIaneMode::ArmXYZ) {
             const float positionSpeed = 9.0f * armControlScalar;
-            targetPosition.x = constrain(targetPosition.x + joyAX * positionSpeed, 0.0f, 600.0f);
-            targetPosition.y = constrain(targetPosition.y + joyAY * positionSpeed, -400.0f, 400.0f);
-            targetPosition.z = constrain(targetPosition.z + joyBY * positionSpeed, 0.0f, 600.0f);
+            targetPosition.x = constrain(targetPosition.x + joyAX * positionSpeed, 0.0f, 780.0f);
+            targetPosition.y = constrain(targetPosition.y + joyAY * positionSpeed, -780.0f, 780.0f);
+            targetPosition.z = 0.0f;
+
+            const float extensionSpeed = 8.0f * armControlScalar;
+            const float extMin = fminf(ikConfig.elbowExtension.minMm, ikConfig.elbowExtension.maxMm);
+            const float extMax = fmaxf(ikConfig.elbowExtension.minMm, ikConfig.elbowExtension.maxMm);
+            manualExtensionMm = constrain(manualExtensionMm + joyBY * extensionSpeed, extMin, extMax);
         } else {
             if (!orientationAnglesValid) {
                 manualPitchDeg = constrain(armCommand.pitchDegrees, 0.0f, 180.0f);
@@ -650,10 +704,18 @@ void updateThegillControl() {
         }
         commandGrippers(gripperCommandValue);
 
+        const float extMin = fminf(ikConfig.elbowExtension.minMm, ikConfig.elbowExtension.maxMm);
+        const float extMax = fmaxf(ikConfig.elbowExtension.minMm, ikConfig.elbowExtension.maxMm);
+        manualExtensionMm = constrain(manualExtensionMm, extMin, extMax);
+        float commandedExtension = extensionEnabled ? manualExtensionMm : 0.0f;
+
+        armCommand.baseDegrees = manualBaseYawDeg;
+        armCommand.extensionMillimeters = commandedExtension;
         IKEngine::IKSolution solution;
-        if (ikSolver.solve(targetPosition, solution)) {
-            armCommand.extensionMillimeters = constrain(solution.joints.elbowExtensionMm, 0.0f, 130.0f);
-            armCommand.baseDegrees = solution.joints.baseYawDeg;
+        ikSolver.setExtensionEnabled(extensionEnabled);
+        if (ikSolver.solvePlanar(targetPosition, commandedExtension, solution)) {
+            solution.joints.baseYawDeg = manualBaseYawDeg;
+            solution.joints.elbowExtensionMm = commandedExtension;
             armCommand.shoulderDegrees = solution.joints.shoulderDeg;
             armCommand.elbowDegrees = solution.joints.elbowDeg;
             armCommand.pitchDegrees = solution.joints.gripperPitchDeg;
@@ -684,6 +746,12 @@ void updateThegillControl() {
             manualPitchDeg = armCommand.pitchDegrees;
             manualYawDeg = armCommand.yawDegrees;
             manualRollDeg = armCommand.rollDegrees;
+        } else {
+            armCommand.validMask = ArmCommandMask::Extension |
+                                   ArmCommandMask::Base |
+                                   ArmCommandMask::AllGrippers;
+            armCommand.flags = ArmCommandFlag::EnableOutputs;
+            armCommandDirty = true;
         }
 
         refreshPeripheralState(0.0f);
@@ -1065,15 +1133,15 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
     // Shoulder joint position (rotates around base)
     float shoulderLen = 155.0f;  // From IK config
     float shoulderX = shoulderLen * cosf(shoulderRad) * cosf(baseYawRad);
-    float shoulderY = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
-    float shoulderZ = shoulderLen * sinf(shoulderRad);
+    float shoulderZ = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
+    float shoulderY = shoulderLen * sinf(shoulderRad);
 
     // Elbow joint position
     float forearmLen = 170.0f + solution.joints.elbowExtensionMm;
     float elbowAngleAbs = shoulderRad - elbowRad;  // Absolute elbow angle
     float forearmDirX = cosf(elbowAngleAbs) * cosf(baseYawRad);
-    float forearmDirY = cosf(elbowAngleAbs) * sinf(baseYawRad);
-    float forearmDirZ = sinf(elbowAngleAbs);
+    float forearmDirZ = cosf(elbowAngleAbs) * sinf(baseYawRad);
+    float forearmDirY = sinf(elbowAngleAbs);
     float extensionLen = fmaxf(solution.joints.elbowExtensionMm, 0.0f);
     float rigidLen = forearmLen - extensionLen;
     if (rigidLen < 0.0f) {
@@ -1081,11 +1149,11 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
         rigidLen = 0.0f;
     }
     float extensionBaseX = shoulderX + rigidLen * forearmDirX;
-    float extensionBaseY = shoulderY + rigidLen * forearmDirY;
     float extensionBaseZ = shoulderZ + rigidLen * forearmDirZ;
+    float extensionBaseY = shoulderY + rigidLen * forearmDirY;
     float elbowX = extensionBaseX + extensionLen * forearmDirX;
-    float elbowY = extensionBaseY + extensionLen * forearmDirY;
     float elbowZ = extensionBaseZ + extensionLen * forearmDirZ;
+    float elbowY = extensionBaseY + extensionLen * forearmDirY;
 
     // End effector (wrist center)
     float wristLen = 0.0f;  // Reference at extension tip
@@ -1098,7 +1166,8 @@ void draw3DArmVisualization(DisplayCanvas& canvas, const IKEngine::IKSolution& s
     Point2D pShoulder = projectIsometric(shoulderX, shoulderY, shoulderZ);
     Point2D pElbow = projectIsometric(elbowX, elbowY, elbowZ);
     Point2D pWrist = projectIsometric(wristX, wristY, wristZ);
-    Point2D pTarget = projectIsometric(targetPosition.x, targetPosition.y, targetPosition.z);
+    IKEngine::Vec3 targetWorld = planarToWorld(targetPosition.x, targetPosition.y, solution.joints.baseYawDeg);
+    Point2D pTarget = projectIsometric(targetWorld.x, targetWorld.y, targetWorld.z);
 
     // Draw arm links as cylinders for 3D effect
     Point2D pExtensionBase = projectIsometric(extensionBaseX, extensionBaseY, extensionBaseZ);
@@ -1239,12 +1308,12 @@ static IKEngine::Vec3 estimateToolPosition(const ArmStatePacket& packet) {
     const float elbowAngleAbs = shoulderRad - elbowRad;
 
     const float shoulderX = shoulderLen * cosf(shoulderRad) * cosf(baseYawRad);
-    const float shoulderY = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
-    const float shoulderZ = shoulderLen * sinf(shoulderRad);
+    const float shoulderZ = shoulderLen * cosf(shoulderRad) * sinf(baseYawRad);
+    const float shoulderY = shoulderLen * sinf(shoulderRad);
 
     const float elbowX = shoulderX + forearmLen * cosf(elbowAngleAbs) * cosf(baseYawRad);
-    const float elbowY = shoulderY + forearmLen * cosf(elbowAngleAbs) * sinf(baseYawRad);
-    const float elbowZ = shoulderZ + forearmLen * sinf(elbowAngleAbs);
+    const float elbowZ = shoulderZ + forearmLen * cosf(elbowAngleAbs) * sinf(baseYawRad);
+    const float elbowY = shoulderY + forearmLen * sinf(elbowAngleAbs);
 
     const float pitchRad = packet.servoDegrees[2] * DEG_TO_RAD;
     const float yawRad = packet.servoDegrees[4] * DEG_TO_RAD;
@@ -1346,7 +1415,10 @@ void processArmStatePacket(const ArmStatePacket& packet) {
     armStateSynced = true;
     requestArmStatePending = false;
 
-    targetPosition = estimateToolPosition(packet);
+    IKEngine::Vec3 wristTarget = estimateToolPosition(packet);
+    manualBaseYawDeg = packet.baseDegrees;
+    manualExtensionMm = packet.extensionCentimeters * 10.0f;
+    setPlanarTargetFromWorld(wristTarget, manualBaseYawDeg);
 
     const float pitchRad = packet.servoDegrees[2] * DEG_TO_RAD;
     const float yawRad = packet.servoDegrees[4] * DEG_TO_RAD;
@@ -1360,8 +1432,8 @@ void processArmStatePacket(const ArmStatePacket& packet) {
     orientationAnglesValid = true;
     targetToolRollDeg = packet.servoDegrees[3];
 
-    armCommand.extensionMillimeters = packet.extensionCentimeters * 10.0f;
-    armCommand.baseDegrees = packet.baseDegrees;
+    armCommand.extensionMillimeters = manualExtensionMm;
+    armCommand.baseDegrees = manualBaseYawDeg;
     armCommand.shoulderDegrees = packet.servoDegrees[0];
     armCommand.elbowDegrees = packet.servoDegrees[1];
     armCommand.pitchDegrees = packet.servoDegrees[2];

@@ -135,22 +135,32 @@ public:
 
     const IKConfiguration& getConfiguration() const;
     void setConfiguration(const IKConfiguration& config);
+    void setExtensionEnabled(bool enabled);
+    bool isExtensionEnabled() const;
 
     /**
-     * Solve for a target position using an auto-generated tool direction that
-     * points from the base toward the goal.
-     */
-    bool solve(const Vec3& target, IKSolution& outSolution) const;
-
-    /**
-     * Solve using an explicit tool direction hint.
+     * Planar solve for a horizontal/vertical target using a caller supplied
+     * forearm extension.
      *
-     * @param target     Desired end-effector position in millimetres.
-     * @param toolDir    Preferred tool direction (will be normalised).
-     * @param outSolution Populated joint solution.
+     * @param horizontalMm Horizontal distance from the shoulder joint in mm.
+     * @param verticalMm   Vertical height relative to the shoulder joint in mm.
+     * @param extensionOverrideMm Extension of the telescoping forearm in mm.
+     * @param outSolution  Populated joint solution.
      * @return true if the target was reachable without clamping, false otherwise.
      */
-    bool solve(const Vec3& target, const Vec3& toolDir, IKSolution& outSolution) const;
+    bool solvePlanar(float horizontalMm,
+                     float verticalMm,
+                     float extensionOverrideMm,
+                     IKSolution& outSolution) const;
+
+    /**
+     * Convenience overload that takes a Vec3 (x=horizontal, y=vertical).
+     */
+    bool solvePlanar(const Vec3& planarTarget,
+                     float extensionOverrideMm,
+                     IKSolution& outSolution) const {
+        return solvePlanar(planarTarget.x, planarTarget.y, extensionOverrideMm, outSolution);
+    }
 
     /**
      * Normalises a vector. Returns {1,0,0} when magnitude falls below epsilon.
@@ -159,8 +169,8 @@ public:
 
 private:
     IKConfiguration config_;
+    bool extensionEnabled_ = true;
 
-    bool solveInternal(const Vec3& target, const Vec3* toolDir, IKSolution& outSolution) const;
 };
 
 } // namespace IKEngine

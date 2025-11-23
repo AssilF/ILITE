@@ -263,6 +263,8 @@ void toggleUnifiedGripper();
 void setUnifiedGripper(bool open);
 bool isGripperOpen();
 void setGripperFingerPosition(uint8_t fingerIndex, float degrees);
+void setExtensionEnabled(bool enabled);
+bool isExtensionEnabled();
 bool acquirePeripheralCommand(PeripheralCommand& out);
 bool acquireConfigurationPacket(ConfigurationPacket& out);
 bool acquireArmCommand(ArmControlCommand& out);

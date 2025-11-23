@@ -44,6 +44,14 @@ void InverseKinematics::setConfiguration(const IKConfiguration& config) {
     config_ = config;
 }
 
+void InverseKinematics::setExtensionEnabled(bool enabled) {
+    extensionEnabled_ = enabled;
+}
+
+bool InverseKinematics::isExtensionEnabled() const {
+    return extensionEnabled_;
+}
+
 Vec3 InverseKinematics::normalise(const Vec3& value, float epsilon) {
     if (!isFiniteVec(value)) {
         return Vec3{1.0f, 0.0f, 0.0f};
@@ -56,18 +64,13 @@ Vec3 InverseKinematics::normalise(const Vec3& value, float epsilon) {
     return Vec3{value.x * invMag, value.y * invMag, value.z * invMag};
 }
 
-bool InverseKinematics::solve(const Vec3& target, IKSolution& outSolution) const {
-    return solveInternal(target, nullptr, outSolution);
-}
-
-bool InverseKinematics::solve(const Vec3& target, const Vec3& toolDir, IKSolution& outSolution) const {
-    return solveInternal(target, &toolDir, outSolution);
-}
-
-bool InverseKinematics::solveInternal(const Vec3& target, const Vec3*, IKSolution& outSolution) const {
+bool InverseKinematics::solvePlanar(float horizontalMm,
+                                    float verticalMm,
+                                    float extensionOverrideMm,
+                                    IKSolution& outSolution) const {
     outSolution = IKSolution{};
 
-    if (!isFiniteVec(target)) {
+    if (!isfinite(horizontalMm) || !isfinite(verticalMm)) {
         outSolution.reachable = false;
         outSolution.constrained = true;
         return false;
@@ -75,57 +78,43 @@ bool InverseKinematics::solveInternal(const Vec3& target, const Vec3*, IKSolutio
 
     const float L1 = config_.dimensions.shoulderLengthMm;
     const float L2Base = config_.dimensions.elbowLengthMm;
-const float extMin = std::min(config_.elbowExtension.minMm, config_.elbowExtension.maxMm);
-const float extMax = std::max(config_.elbowExtension.minMm, config_.elbowExtension.maxMm);
-    const float L2Min = L2Base + extMin;
-    const float L2Max = L2Base + extMax;
-
-    const JointLimits baseLimits{
-        std::min(config_.baseYaw.minDeg, config_.baseYaw.maxDeg),
-        std::max(config_.baseYaw.minDeg, config_.baseYaw.maxDeg)};
-    const JointLimits shoulderLimits{
-        std::min(config_.shoulder.minDeg, config_.shoulder.maxDeg),
-        std::max(config_.shoulder.minDeg, config_.shoulder.maxDeg)};
-    const JointLimits elbowLimits{
-        std::min(config_.elbow.minDeg, config_.elbow.maxDeg),
-        std::max(config_.elbow.minDeg, config_.elbow.maxDeg)};
+    const float configuredExtMin = std::min(config_.elbowExtension.minMm, config_.elbowExtension.maxMm);
+    const float configuredExtMax = std::max(config_.elbowExtension.minMm, config_.elbowExtension.maxMm);
+    const float extMin = extensionEnabled_ ? configuredExtMin : 0.0f;
+    const float extMax = extensionEnabled_ ? configuredExtMax : 0.0f;
+    const float shoulderMin = std::min(config_.shoulder.minDeg, config_.shoulder.maxDeg);
+    const float shoulderMax = std::max(config_.shoulder.minDeg, config_.shoulder.maxDeg);
+    const float elbowMin = std::min(config_.elbow.minDeg, config_.elbow.maxDeg);
+    const float elbowMax = std::max(config_.elbow.minDeg, config_.elbow.maxDeg);
 
     bool constrained = false;
 
-    float desiredYaw = toDegrees(atan2f(target.z, target.x));
-    float baseYawDeg = clampf(desiredYaw, baseLimits.minDeg, baseLimits.maxDeg);
-    if (fabsf(baseYawDeg - desiredYaw) > 1e-3f) {
-        constrained = true;
-    }
-    const float baseYawRad = baseYawDeg * DEG_TO_RAD;
-    const float cosYaw = cosf(baseYawRad);
-    const float sinYaw = sinf(baseYawRad);
-
-    float planarX = cosYaw * target.x + sinYaw * target.z;
-    float lateral = -sinYaw * target.x + cosYaw * target.z;
+    float planarX = horizontalMm;
     if (planarX < 0.0f) {
         planarX = 0.0f;
         constrained = true;
     }
-    if (fabsf(lateral) > 5.0f) {
-        constrained = true;
+    float vertical = verticalMm;
+    if (!isfinite(planarX) || !isfinite(vertical)) {
+        outSolution.reachable = false;
+        outSolution.constrained = true;
+        return false;
     }
+    float extensionMm = clampf(extensionOverrideMm, extMin, extMax);
+    const float L2 = L2Base + extensionMm;
 
-    const float vertical = target.y;
     float distance = sqrtf(planarX * planarX + vertical * vertical);
-
-    float desiredL2 = (distance > config_.geometryEpsilonMm) ? distance - L1 : 0.0f;
-    float L2 = clampf(L2Base + clampf(desiredL2, extMin, extMax), L2Min, L2Max);
-    float extensionMm = clampf(L2 - L2Base, extMin, extMax);
-
     const float reachMin = fabsf(L1 - L2);
     const float reachMax = L1 + L2;
     float distanceEval = clampf(distance, reachMin, reachMax);
     if (fabsf(distanceEval - distance) > 1e-3f) {
         constrained = true;
     }
+    distanceEval = fmaxf(distanceEval, config_.geometryEpsilonMm);
 
-    const float angleToTarget = atan2f(vertical, planarX);
+    const float angleToTarget = (distanceEval > config_.geometryEpsilonMm)
+                                    ? atan2f(vertical, planarX)
+                                    : 0.0f;
     float cosShoulder = (L1 * L1 + distanceEval * distanceEval - L2 * L2) /
                         (2.0f * L1 * distanceEval);
     cosShoulder = clampf(cosShoulder, -1.0f, 1.0f);
@@ -138,8 +127,8 @@ const float extMax = std::max(config_.elbowExtension.minMm, config_.elbowExtensi
     float elbowRad = acosf(cosElbow);
     float elbowDeg = toDegrees(elbowRad);
 
-    float shoulderClamped = clampf(shoulderDeg, shoulderLimits.minDeg, shoulderLimits.maxDeg);
-    float elbowClamped = clampf(elbowDeg, elbowLimits.minDeg, elbowLimits.maxDeg);
+    float shoulderClamped = clampf(shoulderDeg, shoulderMin, shoulderMax);
+    float elbowClamped = clampf(elbowDeg, elbowMin, elbowMax);
     if (fabsf(shoulderClamped - shoulderDeg) > 1e-3f || fabsf(elbowClamped - elbowDeg) > 1e-3f) {
         constrained = true;
     }
@@ -153,25 +142,15 @@ const float extMax = std::max(config_.elbowExtension.minMm, config_.elbowExtensi
     float wristLocalX = elbowLocalX + L2 * cosf(elbowAbsRad);
     float wristLocalY = elbowLocalY + L2 * sinf(elbowAbsRad);
 
-    Vec3 wristWorld{
-        cosYaw * wristLocalX,
-        wristLocalY,
-        sinYaw * wristLocalX
-    };
-
-    Vec3 elbowWorld{
-        cosYaw * elbowLocalX,
-        elbowLocalY,
-        sinYaw * elbowLocalX
-    };
-
+    Vec3 elbowWorld{elbowLocalX, elbowLocalY, 0.0f};
+    Vec3 wristWorld{wristLocalX, wristLocalY, 0.0f};
     Vec3 forearmDir{
         wristWorld.x - elbowWorld.x,
         wristWorld.y - elbowWorld.y,
         wristWorld.z - elbowWorld.z
     };
 
-    outSolution.joints.baseYawDeg = baseYawDeg;
+    outSolution.joints.baseYawDeg = 0.0f;
     outSolution.joints.shoulderDeg = shoulderClamped;
     outSolution.joints.elbowDeg = elbowClamped;
     outSolution.joints.elbowExtensionMm = extensionMm;

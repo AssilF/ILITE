@@ -258,8 +258,11 @@ public:
             // Solve IK to get current solution
             extern IKEngine::Vec3 targetPosition;
             extern IKEngine::InverseKinematics ikSolver;
+            extern ArmControlCommand armCommand;
             IKEngine::IKSolution solution;
-            ikSolver.solve(targetPosition, solution);
+            ikSolver.solvePlanar(targetPosition, armCommand.extensionMillimeters, solution);
+            solution.joints.baseYawDeg = armCommand.baseDegrees;
+            solution.joints.elbowExtensionMm = armCommand.extensionMillimeters;
 
             draw3DArmVisualization(canvas, solution);
 
@@ -338,6 +341,14 @@ public:
             0.05f,
             0.1f,
             ICON_TUNING,
+            &root);
+
+        builder.addToggle(
+            "thegill.extension",
+            "Enable Extension",
+            []() { setExtensionEnabled(!isExtensionEnabled()); },
+            []() { return isExtensionEnabled(); },
+            ICON_SETTINGS,
             &root);
 
         // Camera view submenu (for arm visualization)
@@ -2136,7 +2147,4 @@ void registerBuiltInModules() {
     registered = true;
     Serial.println("[ILITE] Built-in modules registered: TheGill, DroneGaze, Bulky");
 }
-
-
-
 
