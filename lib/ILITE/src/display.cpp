@@ -210,8 +210,12 @@ static const char* easingToString(GillDriveEasing easing){
   switch(easing){
     case GillDriveEasing::None: return "None";
     case GillDriveEasing::SlewRate: return "Slew";
-    case GillDriveEasing::Exponential:
-    default: return "Exponential";
+    case GillDriveEasing::Exponential: return "Expo";
+    case GillDriveEasing::Sine: return "Sine";
+    case GillDriveEasing::EaseIn: return "EaseIn";
+    case GillDriveEasing::EaseOut: return "EaseOut";
+    case GillDriveEasing::EaseInOut: return "EaseInOut";
+    default: return "Unknown";
   }
 }
 

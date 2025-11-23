@@ -55,6 +55,14 @@ ConfigurationPacket thegillConfigurationPacket{
   20500
 };
 
+SettingsPacket thegillSettingsPacket{
+  THEGILL_SETTINGS_MAGIC,
+  "ThegillS3",
+  "ILITE",
+  "",
+  ""
+};
+
 StatusPacket thegillStatusPacket{
   THEGILL_STATUS_MAGIC,
   {0, 0, 0, 0},
@@ -118,14 +126,20 @@ static bool buzzerEnabled = true;
 static bool driveEnabled = true;
 static bool failsafeEnabled = true;
 static bool armOutputsEnabled = false;
+static bool gripperHoldEnabled = false;
+static bool gripperHoldLatched = false;
 static bool requestStatusPulse = false;
 static bool requestArmStatePending = false;
 static bool armStateSynced = false;
 static bool peripheralDirty = true;
 static bool configDirty = true;
+static bool settingsDirty = true;
 static bool extensionEnabled = true;
+static bool frontLightManual = false;
+static bool frontLightEnabled = false;
 static uint32_t lastPeripheralSendMs = 0;
 static uint32_t lastConfigSendMs = 0;
+static uint32_t lastSettingsSendMs = 0;
 static uint32_t lastArmStateRequestMs = 0;
 static uint32_t lastArmCommandSendMs = 0;
 static uint32_t lastStatusPacketMs = 0;
@@ -135,6 +149,16 @@ static float lastRightCommand = 0.0f;
 static bool armCommandDirty = false;
 static uint8_t systemCommandLatch = 0;
 static MechIaneMode previousMode = MechIaneMode::DriveMode;
+static uint8_t frontLightDuty = 200;
+static uint8_t pumpDutySetting = 180;
+static bool pumpEnabled = false;
+static uint32_t joyAPressMs = 0;
+static uint32_t joyBPressMs = 0;
+static bool joyALong = false;
+static bool joyBLong = false;
+static bool prevJoyAState = false;
+static bool prevJoyBState = false;
+constexpr uint32_t kHoldThresholdMs = 700;
 
 static bool updateByte(uint8_t& target, uint8_t value) {
     if (target == value) {
@@ -150,10 +174,11 @@ static void refreshPeripheralState(float driveMagnitude) {
     const uint8_t armLed = isArmStateSynced() ? 220 : 90;
     const uint8_t gripperLed = isGripperOpen() ? 230 : 80;
 
-    if (!ledTargetActive) {
-        changed |= updateByte(thegillPeripheralCommand.ledPwm[0], driveLed);
-        thegillRuntime.ledPwm[0] = thegillPeripheralCommand.ledPwm[0];
-    }
+    uint8_t desiredFront = frontLightManual
+                               ? (frontLightEnabled ? frontLightDuty : 0)
+                               : driveLed;
+    changed |= updateByte(thegillPeripheralCommand.ledPwm[0], desiredFront);
+    thegillRuntime.ledPwm[0] = thegillPeripheralCommand.ledPwm[0];
     changed |= updateByte(thegillPeripheralCommand.ledPwm[1], armLed);
     changed |= updateByte(thegillPeripheralCommand.ledPwm[2], gripperLed);
     thegillRuntime.ledPwm[1] = thegillPeripheralCommand.ledPwm[1];
@@ -170,6 +195,9 @@ static void refreshPeripheralState(float driveMagnitude) {
     if (changed) {
         peripheralDirty = true;
     }
+
+    // Pump runtime mirror for UI
+    thegillRuntime.pumpDuty = thegillPeripheralCommand.pumpDuty;
 }
 
 static void latchSystemCommand(uint8_t bits) {
@@ -187,6 +215,11 @@ static void syncConfigurationPacket() {
             easingRateByte = static_cast<uint8_t>(constrain(thegillConfig.easingRate * 255.0f, 0.0f, 255.0f));
             break;
         case GillDriveEasing::Exponential:
+        case GillDriveEasing::Sine:
+        case GillDriveEasing::EaseIn:
+        case GillDriveEasing::EaseOut:
+        case GillDriveEasing::EaseInOut:
+            // These map to the rover's exponential mode; shaping is applied locally.
             easingMode = DriveEasingMode::Exponential;
             easingRateByte = static_cast<uint8_t>(constrain(thegillConfig.easingRate * 255.0f, 0.0f, 255.0f));
             break;
@@ -520,45 +553,80 @@ void updateThegillControl() {
     }
 
     if (!inDriveMode) {
-        disablePumpTarget(false);
-        disableLedTarget(false);
         potTarget = PotTarget::ArmSpeed;
-    } else if (!pumpTargetActive && !ledTargetActive) {
+    } else {
         potTarget = PotTarget::DriveSpeed;
     }
 
-    auto comboTriggered = [&](bool buttonPressed, bool buttonHeld) {
-        return (buttonPressed && shiftDown) || (shiftPressed && buttonHeld);
-    };
-
-    if (inDriveMode) {
-        if (comboTriggered(rightPressed, rightDown)) {
-            if (pumpTargetActive) {
-                disablePumpTarget(true);
-            } else {
-                disableLedTarget(false);
-                enablePumpTarget();
-            }
-        } else if (comboTriggered(leftPressed, leftDown)) {
-            if (ledTargetActive) {
-                disableLedTarget(true);
-            } else {
-                disablePumpTarget(false);
-                enableLedTarget();
-            }
-        }
-    } else if (shiftPressed && !leftDown && !rightDown) {
-        if (mechIaneMode == MechIaneMode::ArmXYZ) {
-            mechIaneMode = MechIaneMode::ArmOrientation;
-            requestOrientationRetarget();
-        } else {
-            mechIaneMode = MechIaneMode::ArmXYZ;
-        }
+    // Mode toggles
+    if (rightPressed) {
+        mechIaneMode = inDriveMode ? MechIaneMode::ArmXYZ : MechIaneMode::DriveMode;
+        potTarget = (mechIaneMode == MechIaneMode::DriveMode) ? PotTarget::DriveSpeed : PotTarget::ArmSpeed;
+        AudioRegistry::play("menu_select");
+    } else if (!inDriveMode && shiftPressed && !leftDown && !rightDown) {
+        mechIaneMode = (mechIaneMode == MechIaneMode::ArmXYZ) ? MechIaneMode::ArmOrientation : MechIaneMode::ArmXYZ;
         potTarget = PotTarget::ArmSpeed;
+        requestOrientationRetarget();
         AudioRegistry::play("menu_select");
     }
 
-    applyPotValue(potValue);
+    if (!inDriveMode && leftPressed) {
+        gripperHoldEnabled = !gripperHoldEnabled;
+        gripperHoldLatched = false;
+        AudioRegistry::play(gripperHoldEnabled ? "startup" : "menu_back");
+    }
+
+    // Drive-mode button handling for pump/lights with hold-to-set-pot
+    bool potLocked = false;
+    if (inDriveMode) {
+        if (joyAState && !prevJoyAState) {
+            joyAPressMs = now;
+            joyALong = false;
+        }
+        if (joyBState && !prevJoyBState) {
+            joyBPressMs = now;
+            joyBLong = false;
+        }
+        if (joyAState && !joyALong && (now - joyAPressMs) >= kHoldThresholdMs) {
+            joyALong = true;
+            AudioRegistry::play("menu_select");
+        }
+        if (joyBState && !joyBLong && (now - joyBPressMs) >= kHoldThresholdMs) {
+            joyBLong = true;
+            AudioRegistry::play("menu_select");
+        }
+
+        if (!joyAState && prevJoyAState) {
+            if (joyALong) {
+                pumpDutySetting = static_cast<uint8_t>(roundf(constrain(potValue, 0.0f, 1.0f) * 255.0f));
+                pumpEnabled = true;
+            } else {
+                pumpEnabled = !pumpEnabled;
+            }
+            setPumpDuty(pumpEnabled ? pumpDutySetting : 0);
+        }
+
+        if (!joyBState && prevJoyBState) {
+            if (joyBLong) {
+                frontLightDuty = static_cast<uint8_t>(roundf(constrain(potValue, 0.0f, 1.0f) * 255.0f));
+                frontLightEnabled = true;
+            } else {
+                frontLightEnabled = !frontLightEnabled;
+            }
+            frontLightManual = true;
+            peripheralDirty = true;
+        }
+
+        potLocked = (joyALong && joyAState) || (joyBLong && joyBState);
+    } else {
+        joyALong = joyBLong = false;
+    }
+    prevJoyAState = joyAState;
+    prevJoyBState = joyBState;
+
+    if (!potLocked) {
+        applyPotValue(potValue);
+    }
 
     const float precisionScalar = precisionMode ? 0.45f : 1.0f;
     const float adaptiveScalar = driveSpeedScalar * precisionScalar;
@@ -571,12 +639,44 @@ void updateThegillControl() {
 
     auto shapeAxis = [](float value) {
         float v = (fabsf(value) < kDriveDeadzone) ? 0.0f : value;
-        if (thegillConfig.easing == GillDriveEasing::Exponential) {
-            const float expo = constrain(thegillConfig.easingRate, 0.0f, 1.0f);
-            const float power = 1.0f + expo * 1.5f;
-            v = copysignf(powf(fabsf(v), power), v);
+        float rate = constrain(thegillConfig.easingRate, 0.0f, 1.0f);
+        float sign = copysignf(1.0f, v);
+        float mag = fabsf(v);
+
+        switch (thegillConfig.easing) {
+            case GillDriveEasing::Exponential: {
+                const float power = 1.0f + rate * 1.5f;
+                mag = powf(mag, power);
+                break;
+            }
+            case GillDriveEasing::Sine: {
+                float shaped = sinf(mag * HALF_PI);
+                mag = (1.0f - rate) * mag + rate * shaped;
+                break;
+            }
+            case GillDriveEasing::EaseIn: {
+                float power = 1.0f + rate * 3.0f;
+                mag = powf(mag, power);
+                break;
+            }
+            case GillDriveEasing::EaseOut: {
+                float power = 1.0f + rate * 3.0f;
+                mag = 1.0f - powf(1.0f - mag, power);
+                break;
+            }
+            case GillDriveEasing::EaseInOut: {
+                float shaped = mag * mag * (3.0f - 2.0f * mag); // smoothstep
+                mag = (1.0f - rate) * mag + rate * shaped;
+                break;
+            }
+            case GillDriveEasing::None:
+            case GillDriveEasing::SlewRate:
+            default:
+                break;
         }
-        return constrain(v, -1.0f, 1.0f);
+
+        v = constrain(sign * mag, -1.0f, 1.0f);
+        return v;
     };
 
     auto applySlew = [](float target, float previous) {
@@ -699,8 +799,17 @@ void updateThegillControl() {
             gripperCommandValue = leftDown ? -1.0f : 1.0f;
             gripperOverride = true;
         }
+        if (!gripperOverride && gripperHoldEnabled && gripperHoldLatched) {
+            gripperCommandValue = 1.0f;
+            gripperOverride = true;
+        }
         if (!gripperOverride) {
             gripperCommandValue = 0.0f;
+        }
+        if (gripperHoldEnabled && gripperCommandValue > 0.5f) {
+            gripperHoldLatched = true;
+        } else if (gripperCommandValue < -0.1f) {
+            gripperHoldLatched = false;
         }
         commandGrippers(gripperCommandValue);
 
@@ -1358,6 +1467,22 @@ bool acquireConfigurationPacket(ConfigurationPacket& out) {
     return true;
 }
 
+bool acquireSettingsPacket(SettingsPacket& out) {
+    const uint32_t now = millis();
+    constexpr uint32_t kSettingsMinIntervalMs = 2000;
+    if (!settingsDirty) {
+        return false;
+    }
+    if (lastSettingsSendMs != 0 && (now - lastSettingsSendMs) < kSettingsMinIntervalMs) {
+        return false;
+    }
+    thegillSettingsPacket.magic = THEGILL_SETTINGS_MAGIC;
+    out = thegillSettingsPacket;
+    settingsDirty = false;
+    lastSettingsSendMs = now;
+    return true;
+}
+
 bool acquireArmCommand(ArmControlCommand& out) {
     if (mechIaneMode == MechIaneMode::DriveMode) {
         return false;
@@ -1475,8 +1600,15 @@ void onThegillPaired() {
     failsafeEnabled = true;
     armOutputsEnabled = false;
     buzzerEnabled = true;
+    pumpEnabled = false;
+    frontLightEnabled = false;
+    frontLightManual = false;
+    gripperHoldLatched = false;
+    setPumpDuty(0);
+    setLedLevel(0, 0);
     syncConfigurationPacket();
     configDirty = true;
+    settingsDirty = true;
     peripheralDirty = true;
     queueStatusRequest();
     forceArmStateResync();
@@ -1499,10 +1631,20 @@ void onThegillUnpaired() {
     thegillRuntime.cameraView = armCameraView;
     thegillRuntime.pumpDuty = thegillPeripheralCommand.pumpDuty;
     peripheralDirty = true;
+    settingsDirty = true;
+    frontLightEnabled = false;
+    frontLightManual = false;
+    gripperHoldLatched = false;
+    setPumpDuty(0);
+    setLedLevel(0, 0);
 }
 
 void markThegillConfigDirty() {
     configDirty = true;
+}
+
+void markThegillSettingsDirty() {
+    settingsDirty = true;
 }
 
 

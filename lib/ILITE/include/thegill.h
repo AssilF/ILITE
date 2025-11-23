@@ -44,6 +44,10 @@ enum class GillDriveEasing : uint8_t {
   None = 0,
   SlewRate,
   Exponential,
+  Sine,
+  EaseIn,
+  EaseOut,
+  EaseInOut,
 };
 
 struct ThegillConfig {
@@ -166,6 +170,7 @@ struct ThegillRuntime {
 extern ThegillCommand thegillCommand;
 extern PeripheralCommand thegillPeripheralCommand;
 extern ConfigurationPacket thegillConfigurationPacket;
+extern SettingsPacket thegillSettingsPacket;
 extern StatusPacket thegillStatusPacket;
 extern ArmStatePacket thegillArmStatePacket;
 extern ThegillConfig thegillConfig;
@@ -267,6 +272,7 @@ void setExtensionEnabled(bool enabled);
 bool isExtensionEnabled();
 bool acquirePeripheralCommand(PeripheralCommand& out);
 bool acquireConfigurationPacket(ConfigurationPacket& out);
+bool acquireSettingsPacket(SettingsPacket& out);
 bool acquireArmCommand(ArmControlCommand& out);
 void processStatusPacket(const StatusPacket& packet);
 void processArmStatePacket(const ArmStatePacket& packet);
@@ -276,5 +282,6 @@ bool isArmStateSynced();
 void onThegillPaired();
 void onThegillUnpaired();
 void markThegillConfigDirty();
+void markThegillSettingsDirty();
 void cycleControlMode();
 void cycleArmCameraView(int delta);

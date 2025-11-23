@@ -89,7 +89,7 @@ public:
     size_t getDetectionKeywordCount() const override { return 3; }
     const uint8_t* getLogo32x32() const override { return thegill_logo_32x32; }
 
-    size_t getCommandPacketTypeCount() const override { return 4; }
+    size_t getCommandPacketTypeCount() const override { return 5; }
     PacketDescriptor getCommandPacketDescriptor(size_t index) const override {
         if (index == 0) {
             return {"TheGill Command", THEGILL_PACKET_MAGIC, sizeof(ThegillCommand),
@@ -106,6 +106,10 @@ public:
         if (index == 3) {
             return {"Arm Command", ARM_COMMAND_MAGIC, sizeof(ArmControlCommand),
                     sizeof(ArmControlCommand), true, nullptr, 0};
+        }
+        if (index == 4) {
+            return {"Settings Packet", THEGILL_SETTINGS_MAGIC, sizeof(SettingsPacket),
+                    sizeof(SettingsPacket), true, nullptr, 0};
         }
         return {};
     }
@@ -231,6 +235,15 @@ public:
                     }
                 }
                 break;
+            case 4:
+                if (bufferSize >= sizeof(SettingsPacket)) {
+                    SettingsPacket pkt{};
+                    if (acquireSettingsPacket(pkt)) {
+                        memcpy(buffer, &pkt, sizeof(SettingsPacket));
+                        return sizeof(SettingsPacket);
+                    }
+                }
+                break;
         }
         return 0;
     }
@@ -326,6 +339,10 @@ public:
         addEasingEntry(builder, easingMenu, GillDriveEasing::None, "None");
         addEasingEntry(builder, easingMenu, GillDriveEasing::SlewRate, "Slew Rate");
         addEasingEntry(builder, easingMenu, GillDriveEasing::Exponential, "Exponential");
+        addEasingEntry(builder, easingMenu, GillDriveEasing::Sine, "Sine");
+        addEasingEntry(builder, easingMenu, GillDriveEasing::EaseIn, "Ease In");
+        addEasingEntry(builder, easingMenu, GillDriveEasing::EaseOut, "Ease Out");
+        addEasingEntry(builder, easingMenu, GillDriveEasing::EaseInOut, "Ease In/Out");
 
         builder.addEditableFloat(
             "thegill.rate.edit",
@@ -786,6 +803,10 @@ private:
             case GillDriveEasing::None: return "None";
             case GillDriveEasing::SlewRate: return "Slew";
             case GillDriveEasing::Exponential: return "Expo";
+            case GillDriveEasing::Sine: return "Sine";
+            case GillDriveEasing::EaseIn: return "EaseIn";
+            case GillDriveEasing::EaseOut: return "EaseOut";
+            case GillDriveEasing::EaseInOut: return "EaseInOut";
             default: return "Unknown";
         }
     }
